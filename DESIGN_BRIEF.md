@@ -42,7 +42,7 @@ The process reads a TOML config describing a collection of **routes**. Each rout
 * a unique **slug** (the key);
 * a **maximum age**, so old mail isn't mishandled after an outage;
 * a **handler reference** (a registered entry-point name — see below). This is many-to-one: several routes may reference the same handler. A handler is not owned by a route and must not assume it serves exactly one.
-* The config file will also include general configuration data, such as timeouts, paths to secret / token files, and a base directory for routes' handlers to store state information.
+* The config file will also include general configuration data, such as timeouts, the token cache path, and a base directory for routes' handlers to store state information. (Not the secrets file path — see Deployment; that path isn't knowable at config-writing time.)
 
 A route entry may also carry **handler-specific keys** (data storage paths, model identifiers, message templates, …). The engine validates only the keys it knows about and passes the full entry through to the handler opaquely — extra keys are the handler's business, not the engine's.
 
@@ -162,17 +162,17 @@ There is **no** processing-order guarantee (arrival order is not processing orde
 
 **Delegated OAuth only** (standard authorization-code flow against the service-account mailbox). Application-level permissions would avoid refresh-token fragility, but require tenant-admin steps we can't get; we accept the trade.
 
-* `rah auth` runs the interactive flow once and writes the msal token cache.
+* `rah auth` runs the interactive flow once and writes the msal token cache. We're a confidential client (the tenant doesn't allow public client registrations), so the flow is: print the authorization URL, sign in from any browser, paste the redirect URL back into the prompt. No localhost listener; works over SSH.
 * `rah watch` refreshes the token proactively about once an hour inside the poll loop (and on demand after a 401), keeping the refresh token warm instead of letting it age toward an inactivity cutoff.
 * The accepted failure mode: a conditional-access or MFA policy change can invalidate the refresh token at any time, and there is nothing we can do about it. When that happens `rah watch` keeps running, logs loudly, and keeps re-reading the token cache each cycle — so recovery is a human re-running `rah auth`, no service restart needed. `rah doctor` reports token health.
 
 ## Configuration, Secrets, and Tokens
 
 * **Main config** — route definitions and operational policy: slugs, handler refs, per-route timeouts, max-age, and any handler-specific keys (storage paths, model identifiers, …). Contains no credentials; committable.
-* **Secrets file** — a separate TOML file holding tenant/client IDs, the client secret, and the token-store location. Mode `0440`, owned by the service user / group, never committed.
-* **Token store** — `msal`'s serialized token cache, at the location given in the secrets file. Mode `0660`, owned by the service user / group, never committed.
+* **Secrets file** — a separate TOML file holding tenant/client IDs and the client secret. Mode `0440`, owned by the service user / group, never committed.
+* **Token store** — `msal`'s serialized token cache, at the location given in the main config. Mode `0600`, owned by the service user, never committed.
 
-Secrets do **not** go in environment variables. Env vars are too easy to extract: they leak into every child process (including anything a handler shells out to) and surface in `systemctl show`, crash reports, and debug logging. The environment (or a CLI flag) carries at most the *path* to the secrets file — a path is not a secret. (Under systemd that path is `$CREDENTIALS_DIRECTORY` — see Deployment.)
+Secrets do **not** go in environment variables. Env vars are too easy to extract: they leak into every child process (including anything a handler shells out to) and surface in `systemctl show`, crash reports, and debug logging. The environment (or a CLI flag) carries at most the *path* to the secrets file — a path is not a secret. (Under systemd the unit derives that path from the credentials directory — see Deployment.)
 
 ## Deployment
 
@@ -186,17 +186,19 @@ Group=rah-grp
 StateDirectory=rah
 LoadCredentialEncrypted=secrets.toml:/etc/rah/secrets.toml.cred
 LoadCredentialEncrypted=token-key:/etc/rah/token-key.cred
+Environment=RAH_SECRETS=%d/secrets.toml
 ```
 
-* **Secrets file** — delivered via systemd's credential mechanism (`LoadCredential=`, or `LoadCredentialEncrypted=` with the file sealed to the host key and/or TPM2 by `systemd-creds encrypt`). systemd decrypts at service start with no human in the loop — unattended startup works because the trust anchor is the machine, not a passphrase — and exposes the plaintext only in a per-service, non-swappable ramfs directory located via `$CREDENTIALS_DIRECTORY`. The service user never needs read access to the on-disk secret, and with TPM sealing, backups and disk images contain only ciphertext. `rah` resolves the secrets path from `$CREDENTIALS_DIRECTORY` when set, else from a `--secrets` flag (the laptop dev loop).
+* **Secrets file** — delivered via systemd's credential mechanism (`LoadCredential=`, or `LoadCredentialEncrypted=` with the file sealed to the host key and/or TPM2 by `systemd-creds encrypt`). systemd decrypts at service start with no human in the loop — unattended startup works because the trust anchor is the machine, not a passphrase — and exposes the plaintext only in a per-service, non-swappable ramfs directory located via `$CREDENTIALS_DIRECTORY`. The service user never needs read access to the on-disk secret, and with TPM sealing, backups and disk images contain only ciphertext. `rah` takes the secrets path from `--secrets` or `$RAH_SECRETS` (the flag wins); the unit sets `Environment=RAH_SECRETS=%d/secrets.toml`, `%d` being systemd's specifier for the credentials directory.
 * **Token store** — systemd credentials are provisioned once per start and are read-only, so the mutable OAuth token cache (refresh tokens rotate on use) cannot live there. It lives in the state directory (`/var/lib/rah`), which persists across restarts and reboots.
+* **Interactive commands** — `$CREDENTIALS_DIRECTORY` exists only inside the unit, so `rah auth` and `rah init` can't see it when run from a shell. Run them under `systemd-run --pty` with the same credential properties as the service; if that turns out to be more trouble than it's worth, a plain permissions-protected secrets file (skipping `systemd-creds` entirely) is a fine fallback.
 
 ## CLI Entry Points
 
 Multi-command, git-like, built with **typer** (`@typer.group()` + subcommands):
 
 * `rah watch` — the main long-running process: the poll/dispatch loop described in the Design Overview. Runs in the foreground (systemd handles process management). `--poll-interval` overrides the config value.
-* `rah auth` — runs the delegated OAuth flow; stores the token cache at the location given in the secrets file.
+* `rah auth` — runs the delegated OAuth flow; stores the token cache at the location given in the main config.
 * `rah reprocess` — replays failed mail **on demand**, covering both `dead-letters` and the `{slug}/error` folders. It does not process anything itself: it resets the message's machine state (retries-left, retry-time) and moves it back to the inbox, where the watcher claims it like any new message — replay never grows a second claim/move code path, so the single-writer invariant holds. Not automatic: the usual cause is a missing/wrong config, and a human should fix config before replaying.
 * `rah doctor` — local diagnostics, standing in for a /health endpoint: parses the config, lists loaded routes and their resolved handler entry points, checks the secrets file and token cache, and makes a live Graph call to verify mailbox access and folder layout. Human-readable output, nonzero exit status on failure so it can back a cron or monitoring check. `--fix` idempotently provisions anything missing in the mailbox (route folders, the `rah:*` master category list).
 * `rah init` — alias for `rah doctor --fix`; the documented first-run step after `rah auth`.

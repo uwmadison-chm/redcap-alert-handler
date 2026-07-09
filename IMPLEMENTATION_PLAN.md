@@ -2,7 +2,7 @@
 
 Companion to `DESIGN_BRIEF.md`. Steps are ordered so that every stage ends with something runnable, and the debugging tools (`rah auth`, `rah doctor`) exist before the machinery they'll debug. Development is red-green: each step's tests are written before its code. Throughout, CLI behavior follows [clig.dev](https://clig.dev/)
 
-Each step lists a **Done when**; this deliniates basic units of work.
+Each step lists a **Done when**; this delineates basic units of work.
 
 ## Language & Packages
 
@@ -16,19 +16,20 @@ Each step lists a **Done when**; this deliniates basic units of work.
 * `ruff` for linting and formatting
 * `ty` for type checking
 * `pytest` and `pytest-xdist` for testing (`pytest -n auto` for parallel testing)
-* `rust-just` for simple `make`-like development commands (don't set up `just` recipes for `rah` CLI endopoints)
+* `rust-just` for simple `make`-like development commands (don't set up `just` recipes for `rah` CLI endpoints)
 
 ## Organization:
 
 `src/redcap_alert_handler` -- source base, contains `__init__.py` and main modules
 `src/redcap_alert_handler/cli` -- CLI endpoint files
 `tests/` -- tests
-`tests/data/` -- stored fixture data for testing; good / bad configurations should generally be in files rather than 
+`tests/data/` -- stored fixture data for testing; good / bad configurations should generally be in files rather than inline strings in test code
 
 ## Universal CLI Options and environment variables
 
-* `--config`, `-c`, `$RAH_CONFIG` -- path to the configuration TOML file
-* `--verbose`, `-v` `$DEBUG` -- set logger level to logging.DEBUG
+* `--config`, `-c`, `$RAH_CONFIG` -- path to the configuration TOML file. No default path: a command that needs config and doesn't get one exits with a usage error.
+* `--secrets`, `$RAH_SECRETS` -- path to the secrets TOML file; the flag wins if both are present. This path can't live in the config file because under systemd credentials it isn't known until the service starts; the unit bridges with `Environment=RAH_SECRETS=%d/secrets.toml` (`%d` is systemd's specifier for the credentials directory).
+* `--verbose`, `-v`, `$RAH_DEBUG` -- set logger level to logging.DEBUG
 * `--quiet`, `-q` -- set logger level to logging.ERROR (if both are specified, warn and use logging.DEBUG)
 * `--no-color`, `$NO_COLOR`, `$RAH_NO_COLOR` -- turn off color in logging.
 
@@ -38,11 +39,11 @@ Most other configuation information should be in the configuration TOML file.
 
 * Use color in logs sparingly, for important effect. `typer` includes `rich` so you can use that syntax.
 * Prefixing log lines with emoji is okay in moderation. Use a small set for INFO and above -- possibly ✅ and ❌ for INFO-level success / failure, 💥 for ERROR-level messages. DEBUG messages may choose from a larger, more expressive set.
-* If emoji are used to flag message types, there should be something like `rah log-help` to print emjoi and their meanings
+* If emoji are used to flag message types, there should be something like `rah log-help` to print emoji and their meanings
 * Do not include emoji as infix or suffix indicators
 * CLI commands should gracefully handle "normal unix things" -- ^C and `kill` and being passed to `head`, for example. Don't write a BrokenPipeError or KeyboardInterrupt to INFO (they're acceptable on DEBUG, though).
 * Dates & times should be specified in ISO format
-* Durations and quantities (if needed), should be specifiable in human-readable format (3h -> 3 hours, 4k -> 4096)
+* Durations and quantities (if needed) should be specifiable in human-readable format (3h -> 3 hours). Note `humanfriendly` parses sizes as decimal by default: 4K -> 4000, 4KiB -> 4096. Take the default.
 
 ## 0. Scaffold and CLI framing
 
@@ -54,7 +55,7 @@ Most other configuation information should be in the configuration TOML file.
   * exit codes: 0 success, 1 runtime failure, 2 usage (typer's default);
   * color off when not a TTY or options / env requires
 * `ruff`, `ty`, `pytest` configured and passing in a pre-commit-or-CI check.
-* `rust-just` installed (`rust-just` in pypi) and a justfile with working recipes for common development tasks for testing, linting, and formatting
+* `rust-just` installed (`rust-just` in pypi) and a justfile with working recipes for common development tasks for testing, linting, formatting, and type checking
 * Expect `just` to be available in $PATH, so `just test` and `just format` should... "just" work 
 
 **Done when:** `uv run rah --help` renders sensible help; `just lint`, `just format`, and a trivial `just test` pass. 
@@ -64,17 +65,19 @@ Most other configuation information should be in the configuration TOML file.
 Most configuration is stored in the TOML-based config file, rather than passed as CLI options.
 
 * `tomllib` + plain frozen dataclasses (no config-framework dependency).
-* The file will contain sections for global configuration and routes-specific configration. -- slug key, `max_age`, `handler` ref, with unknown keys preserved and passed through opaquely per the brief.
+* The file contains a global section and a routes section keyed on slug.
 * Global configuration contains:
-  * secrets file path (absolute)
   * token cache path (absolute)
   * state base dir (absolute)
   * polling interval
+  * handler timeout
   * retry / backoff settings
-  * max_age
-* Route-specific config a mapping keyed on slug and containing at least a handler reference. Other keys are passed as part of the context to the handler. Global keys are included in the context; route-specific keys override. Handlers are responsible for handling their own validation and must ignore irrelevant context information.
-* Secrets file is TOML and contains info needed for auth: tenant ID, client ID, and client secret
-* Token cache contains whatever is format easiest for `msal` to deal with
+  * max_age (the default for routes that don't set their own)
+* Route-specific config is a mapping keyed on slug and containing at least a handler reference; `max_age` may be set per-route, overriding the global default. Other keys are passed as part of the context to the handler, preserved opaquely per the brief. Global keys are included in the context; route-specific keys override. Handlers are responsible for handling their own validation and must ignore irrelevant context information.
+* Slugs must look like ASCII Python identifiers (`[A-Za-z_][A-Za-z0-9_]*`) and match subjects case-sensitively. Enforce this in validation: slugs become mailbox folder names, and folder creation is a bad time to find out one contains a `/`.
+* The secrets file path is *not* in the config file -- under systemd credentials it isn't known until the service starts. Resolution order is in "Universal CLI Options" above.
+* Secrets file is TOML and contains info needed for auth: tenant ID, client ID, and client secret (we're a confidential client -- see `rah auth`)
+* Token cache lives at the path given in the main config, in whatever format is easiest for `msal` to deal with
 
 Validation errors are the project's first UX surface: report *all* problems, one per line, with the offending key path; exit 1
 
@@ -82,8 +85,10 @@ Validation errors are the project's first UX surface: report *all* problems, one
 
 ## 2. `rah auth`
 
-* `msal` delegated flow writing the serialized token cache to the path from the secrets file, mode `0600`.
-* **Decision to confirm:** device-code flow is the recommendation -- the service box has no browser, and running `rah auth` over SSH while entering the code on a laptop is exactly its use case. Auth-code-with-localhost-redirect is the fallback if the tenant blocks device code.
+* `msal` delegated auth-code flow as a confidential client -- our tenant doesn't let us register public clients, which rules out device code and is why the secrets file carries a client secret.
+* No localhost listener. `rah auth` prints the authorization URL; the operator opens it in a browser wherever convenient, signs in as the service account, and pastes the resulting redirect URL back into the prompt. This works over SSH, which is the expected case.
+* The registered redirect URI never has to be served -- the browser's failed navigation to it still carries the auth code in the address bar. `msal`'s `initiate_auth_code_flow` / `acquire_token_by_auth_code_flow` handle the state check and code redemption.
+* Writes the serialized token cache to the path from the main config, mode `0600`.
 * On success, print the signed-in account and token expiry as INFO. Single-purpose: no health checks here (that's `doctor`).
 * Silent-refresh path (`acquire_token_silent`) factored so `watch` reuses it later -- probably in `redcap_alert_handler/auth.py`
 
@@ -155,6 +160,7 @@ The main event; everything above composes here.
 ## 9. Deployment and docs
 
 * systemd unit (foreground service, `StateDirectory`, `LoadCredentialEncrypted`) plus a documented bootstrap: create service user, encrypt secrets, `rah auth`, `rah init`, enable service.
+* Interactive commands can't see the service's `$CREDENTIALS_DIRECTORY` -- it exists only inside the unit. The documented pattern for `rah auth` and `rah init` on the service box is `systemd-run --pty` with the same credential properties as the unit. If that proves too fiddly during rehearsal, fall back to a plain permissions-protected secrets file and skip the encryption.
 * Example deployment project (`our-rah` skeleton) and example handler-package skeleton demonstrating the entry-point registration and git-pin pattern from the brief.
 * README and handler-author guide.
 
