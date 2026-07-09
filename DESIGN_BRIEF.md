@@ -10,11 +10,11 @@ O365 mailboxes are not designed to be queues! So we do need to think carefully a
 
 ## Why Would We Do This? _or_ Why Not Data Entry Triggers?
 
-REDCap has poor support for realtime export of data. They have a webhook system in Data Entry Triggers; however, this webhook fires on **every single data change** and the change itself blocks on the server's response, with a five-second timeout. A webhook server failure immediately brings a project to its knees.
+REDCap has poor support for realtime export of data. They have a webhook system in Data Entry Triggers; however, this webhook fires on **every single data change** and the REDCap session itself blocks on the server's response, with a five-second timeout. This means a DET adds at least an HTTPS request's time to every single data change, and if your webhook server is slow, your project will be completely unusable.
 
-And in the very best case, a busy project is going to generate countless Data Entry Triggers that no one ever needs to see. And the data contained in a DET payload is not configurable at all, so nearly every DET request would need to be followed by a request to the REDCap API.
+And in the very best case, projects will generate countless irrelevant Data Entry Trigger. As the data contained in a DET payload is not configurable, nearly every interesting DET request would need to be followed by a request to the REDCap API.
 
-Alerts and Automated Survey Invitations, however, can be targeted based on project logic. They can be configured to contain needed information. And they are normally delivered via email. In my testing, Alerts and ASIs from our REDCap server were delivered to my campus O365 inbox's web interface within 2-6 seconds. That is _plenty_ fast for many "real-time" purposes.
+Alerts and Automated Survey Invitations, however, can be targeted based on project logic. They can be designed to contain needed information. And they are usually delivered via email. In my testing, Alerts and ASIs from our REDCap server were delivered to my campus O365 inbox's web interface within 2-6 seconds. That is _plenty_ fast for many "real-time" purposes.
 
 ## Example Applications
 
@@ -22,7 +22,7 @@ Alerts and Automated Survey Invitations, however, can be targeted based on proje
 * Send an intervention message based on a survey response (again, arbitrary model).
 * Convert email-based alerts to web-push alerts.
 
-When configured correctly this handles data in a HIPAA-compliant way. In our environment, REDCap → internal O365 mailbox email is compliant. Note that PHI therefore lives in *every* folder this tool touches, including `dead-letters` — retention policy must cover all of them, not just the live inbox.
+When configured correctly this handles data in a HIPAA-compliant way. In our environment, REDCap > internal O365 mailbox email is compliant. Note that PHI therefore lives in *every* folder this tool touches, including `dead-letters` — retention policy must cover all of them, not just the live inbox.
 
 ## Design Overview
 
@@ -193,7 +193,7 @@ LoadCredentialEncrypted=token-key:/etc/rah/token-key.cred
 
 ## CLI Entry Points
 
-Multi-command, git-like, built with **Click** (`@click.group()` + subcommands):
+Multi-command, git-like, built with **typer** (`@typer.group()` + subcommands):
 
 * `rah watch` — the main long-running process: the poll/dispatch loop described in the Design Overview. Runs in the foreground (systemd handles process management). `--poll-interval` overrides the config value.
 * `rah auth` — runs the delegated OAuth flow; stores the token cache at the location given in the secrets file.
@@ -211,16 +211,3 @@ A timeout **abandons** a handler; it does not kill it — Python cannot kill a t
 
 * Exact shape of the handler context object (the route slug and the route's full config entry — handler-specific keys included — are fixed requirements; what else it carries is open).
 * `rah reprocess` selection semantics (everything? filter by route / age / folder?) and how replay interacts with max-age (a replayed message older than its route's max age would immediately re-expire).
-
-## Style & process
-
-* Python 3.14
-* **Click** for CLIs (note: `docopt`/`docopt-ng` are both unmaintained)
-* Follow the [clig.dev](https://clig.dev/) CLI guidelines wherever they apply. Concretely: data to stdout, messages and logs to stderr; standard flag names (`-h/--help`, `--version`, `-v/--verbose`, `-q/--quiet`, `--json` where output is machine-readable); meaningful exit codes (0 success, nonzero failure, Click's 2 for usage errors); helpful errors that say what to do next; respect `NO_COLOR` and disable color/animation when not a TTY; no interactive prompts when stdin isn't a TTY.
-* `pytest` for testing; red-green development
-* `ruff` and `ty` for linting & type checking
-* `msal` + `httpx` for Graph access (no `msgraph-sdk-python`)
-
-## Naming
-
-`rah` (REDCap Alert Handler) — namespaces the subcommands cleanly and names the interesting part (dispatch). `boxwatch` / `o365watch` undersell it.

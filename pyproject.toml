@@ -7,7 +7,9 @@ authors = [
     { name = "Nate Vack", email = "njvack@wisc.edu" }
 ]
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "rust-just>=1.55.1",
+]
 
 [project.scripts]
 redcap-alert-handler = "redcap_alert_handler:main"
