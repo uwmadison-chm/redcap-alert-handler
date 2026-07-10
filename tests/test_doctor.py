@@ -19,16 +19,22 @@ SECRETS = Path(__file__).parent / "data" / "secrets"
 # developer's shell environment can't leak into the result.
 CLEAN_ENV = {"RAH_CONFIG": None, "RAH_SECRETS": None}
 
+# Most all-green tests want a token cache that exists and holds an account,
+# so the write_config/cache_with_account fixtures (conftest.py) stand in for
+# the /var/lib paths the checked-in fixture configs carry.
+
+REFRESHED = {"access_token": "AT", "expires_in": 3600}
+ACCOUNTS = [{"username": "svc-rah@example.edu"}]
+
 
 def test_missing_config_is_a_usage_error():
     result = runner.invoke(app, ["doctor"], env=CLEAN_ENV)
     assert result.exit_code == 2
 
 
-def test_good_config_exits_zero():
-    result = runner.invoke(
-        app, ["doctor", "--config", str(CONFIGS / "good_minimal.toml")], env=CLEAN_ENV
-    )
+def test_good_config_exits_zero(write_config, cache_with_account):
+    config = write_config(cache_with_account)
+    result = runner.invoke(app, ["doctor", "--config", str(config)], env=CLEAN_ENV)
     assert result.exit_code == 0
     assert "✅ config okay" in result.output
 
@@ -52,8 +58,9 @@ def test_bad_config_reports_one_line_per_problem():
         ["doctor", "-v", "--config"],
     ],
 )
-def test_verbose_dumps_loaded_config(args):
-    result = runner.invoke(app, [*args, str(CONFIGS / "good_full.toml")], env=CLEAN_ENV)
+def test_verbose_dumps_loaded_config(args, write_config, cache_with_account):
+    config = write_config(cache_with_account, base="good_full.toml")
+    result = runner.invoke(app, [*args, str(config)], env=CLEAN_ENV)
     assert result.exit_code == 0
     assert "consent" in result.output
 
@@ -65,8 +72,9 @@ def test_verbose_dumps_loaded_config(args):
         ["doctor", "-q", "--config"],
     ],
 )
-def test_quiet_good_config_has_no_checkmark(args):
-    result = runner.invoke(app, [*args, str(CONFIGS / "good_minimal.toml")], env=CLEAN_ENV)
+def test_quiet_good_config_has_no_checkmark(args, write_config, cache_with_account):
+    config = write_config(cache_with_account)
+    result = runner.invoke(app, [*args, str(config)], env=CLEAN_ENV)
     assert result.exit_code == 0
     assert "✅" not in result.output
 
@@ -79,16 +87,12 @@ def test_quiet_bad_config_still_shows_errors():
     assert "❌ config:" in result.output
 
 
-def test_good_secrets_reports_okay():
+def test_good_secrets_reports_okay(write_config, cache_with_account, fake_app, install_fake_msal):
+    config = write_config(cache_with_account)
+    install_fake_msal(fake_app(accounts=ACCOUNTS, silent_result=REFRESHED))
     result = runner.invoke(
         app,
-        [
-            "doctor",
-            "--config",
-            str(CONFIGS / "good_minimal.toml"),
-            "--secrets",
-            str(SECRETS / "good.toml"),
-        ],
+        ["doctor", "--config", str(config), "--secrets", str(SECRETS / "good.toml")],
         env=CLEAN_ENV,
     )
     assert result.exit_code == 0
@@ -111,16 +115,14 @@ def test_bad_secrets_fails_the_run():
     assert "❌ secrets:" in result.output
 
 
-def test_far_future_expiry_passes_without_warning():
+def test_far_future_expiry_passes_without_warning(
+    write_config, cache_with_account, fake_app, install_fake_msal
+):
+    config = write_config(cache_with_account)
+    install_fake_msal(fake_app(accounts=ACCOUNTS, silent_result=REFRESHED))
     result = runner.invoke(
         app,
-        [
-            "doctor",
-            "--config",
-            str(CONFIGS / "good_minimal.toml"),
-            "--secrets",
-            str(SECRETS / "good_with_expiry.toml"),
-        ],
+        ["doctor", "--config", str(config), "--secrets", str(SECRETS / "good_with_expiry.toml")],
         env=CLEAN_ENV,
     )
     assert result.exit_code == 0
@@ -145,7 +147,9 @@ def test_expired_secret_fails_the_run():
     assert "expired" in result.output
 
 
-def test_soon_expiring_secret_warns_but_passes(tmp_path):
+def test_soon_expiring_secret_warns_but_passes(
+    tmp_path, write_config, cache_with_account, fake_app, install_fake_msal
+):
     # The warning window is relative to today, so this fixture has to be
     # generated: the good secrets file plus a date two weeks out.
     soon = date.today() + timedelta(days=14)
@@ -153,15 +157,11 @@ def test_soon_expiring_secret_warns_but_passes(tmp_path):
     secrets_file.write_text(
         (SECRETS / "good.toml").read_text() + f"client_secret_expires = {soon.isoformat()}\n"
     )
+    config = write_config(cache_with_account)
+    install_fake_msal(fake_app(accounts=ACCOUNTS, silent_result=REFRESHED))
     result = runner.invoke(
         app,
-        [
-            "doctor",
-            "--config",
-            str(CONFIGS / "good_minimal.toml"),
-            "--secrets",
-            str(secrets_file),
-        ],
+        ["doctor", "--config", str(config), "--secrets", str(secrets_file)],
         env=CLEAN_ENV,
     )
     assert result.exit_code == 0
@@ -169,49 +169,136 @@ def test_soon_expiring_secret_warns_but_passes(tmp_path):
     assert "⚠️ secrets:" in result.output
 
 
-def test_omitted_secrets_notes_they_were_not_checked():
-    result = runner.invoke(
-        app, ["doctor", "--config", str(CONFIGS / "good_minimal.toml")], env=CLEAN_ENV
-    )
+def test_omitted_secrets_notes_they_were_not_checked(write_config, cache_with_account):
+    config = write_config(cache_with_account)
+    result = runner.invoke(app, ["doctor", "--config", str(config)], env=CLEAN_ENV)
     assert result.exit_code == 0
     assert "✅ secrets" not in result.output
     assert "❌ secrets" not in result.output
     assert "not checked" in result.output
 
 
-def test_rah_config_env_var_is_picked_up():
-    result = runner.invoke(
-        app, ["doctor"], env={**CLEAN_ENV, "RAH_CONFIG": str(CONFIGS / "good_minimal.toml")}
-    )
+def test_rah_config_env_var_is_picked_up(write_config, cache_with_account):
+    config = write_config(cache_with_account)
+    result = runner.invoke(app, ["doctor"], env={**CLEAN_ENV, "RAH_CONFIG": str(config)})
     assert result.exit_code == 0
     assert "✅ config okay" in result.output
 
 
-def test_config_flag_beats_rah_config_env_var():
+def test_config_flag_beats_rah_config_env_var(write_config, cache_with_account):
+    config = write_config(cache_with_account)
     result = runner.invoke(
         app,
-        ["doctor", "--config", str(CONFIGS / "good_minimal.toml")],
+        ["doctor", "--config", str(config)],
         env={**CLEAN_ENV, "RAH_CONFIG": str(CONFIGS / "bad_no_routes.toml")},
     )
     assert result.exit_code == 0
     assert "✅ config okay" in result.output
 
 
-def test_rah_secrets_env_var_is_picked_up():
+def test_rah_secrets_env_var_is_picked_up(
+    write_config, cache_with_account, fake_app, install_fake_msal
+):
+    config = write_config(cache_with_account)
+    install_fake_msal(fake_app(accounts=ACCOUNTS, silent_result=REFRESHED))
     result = runner.invoke(
         app,
-        ["doctor", "--config", str(CONFIGS / "good_minimal.toml")],
+        ["doctor", "--config", str(config)],
         env={**CLEAN_ENV, "RAH_SECRETS": str(SECRETS / "good.toml")},
     )
     assert result.exit_code == 0
     assert "✅ secrets okay" in result.output
 
 
-def test_rah_debug_env_var_enables_debug_output():
+def test_rah_debug_env_var_enables_debug_output(write_config, cache_with_account):
+    config = write_config(cache_with_account, base="good_full.toml")
     result = runner.invoke(
         app,
-        ["doctor", "--config", str(CONFIGS / "good_full.toml")],
+        ["doctor", "--config", str(config)],
         env={**CLEAN_ENV, "RAH_DEBUG": "1"},
     )
     assert result.exit_code == 0
     assert "consent" in result.output
+
+
+# --- the token cache check ---
+
+
+def test_missing_cache_file_fails_and_points_at_rah_auth(write_config, tmp_path):
+    config = write_config(tmp_path / "no-such-cache.json")
+    result = runner.invoke(app, ["doctor", "--config", str(config)], env=CLEAN_ENV)
+    assert result.exit_code == 1
+    assert "❌ token cache:" in result.output
+    assert "rah auth" in result.output
+
+
+def test_cache_without_account_fails(write_config, empty_cache):
+    config = write_config(empty_cache)
+    result = runner.invoke(app, ["doctor", "--config", str(config)], env=CLEAN_ENV)
+    assert result.exit_code == 1
+    assert "❌ token cache:" in result.output
+    assert "rah auth" in result.output
+
+
+def test_cache_with_account_but_no_secrets_passes_with_a_note(write_config, cache_with_account):
+    config = write_config(cache_with_account)
+    result = runner.invoke(app, ["doctor", "--config", str(config)], env=CLEAN_ENV)
+    assert result.exit_code == 0
+    assert (
+        "✅ token cache okay: signed in as svc-rah@example.edu, "
+        "but refresh not tried without secrets" in result.output
+    )
+
+
+def test_refreshable_cache_passes(write_config, cache_with_account, fake_app, install_fake_msal):
+    config = write_config(cache_with_account)
+    install_fake_msal(fake_app(accounts=ACCOUNTS, silent_result=REFRESHED))
+    result = runner.invoke(
+        app,
+        ["doctor", "--config", str(config), "--secrets", str(SECRETS / "good.toml")],
+        env=CLEAN_ENV,
+    )
+    assert result.exit_code == 0
+    assert "✅ token cache okay: authenticated as svc-rah@example.edu" in result.output
+    # token lifetime is DEBUG-only detail
+    assert "token valid" not in result.output
+    assert "good until" not in result.output
+
+
+def test_verbose_shows_token_validity(
+    write_config, cache_with_account, fake_app, install_fake_msal
+):
+    # msal reports the cached token's *remaining* life, so odd values like
+    # 3541 are the norm; "59 minutes and 1 second" is more than anyone needs
+    config = write_config(cache_with_account)
+    install_fake_msal(fake_app(accounts=ACCOUNTS, silent_result={"expires_in": 3541}))
+    result = runner.invoke(
+        app,
+        ["doctor", "-v", "--config", str(config), "--secrets", str(SECRETS / "good.toml")],
+        env=CLEAN_ENV,
+    )
+    assert result.exit_code == 0
+    assert "token valid for 59 minutes" in result.output
+    assert "good until" in result.output
+
+
+def test_unrefreshable_cache_fails(write_config, cache_with_account, fake_app, install_fake_msal):
+    config = write_config(cache_with_account)
+    install_fake_msal(fake_app(accounts=ACCOUNTS, silent_result=None))
+    result = runner.invoke(
+        app,
+        ["doctor", "--config", str(config), "--secrets", str(SECRETS / "good.toml")],
+        env=CLEAN_ENV,
+    )
+    assert result.exit_code == 1
+    assert "❌ token cache:" in result.output
+    assert "rah auth" in result.output
+
+
+def test_broken_config_skips_the_cache_check():
+    result = runner.invoke(
+        app, ["doctor", "--config", str(CONFIGS / "bad_no_routes.toml")], env=CLEAN_ENV
+    )
+    assert result.exit_code == 1
+    assert "❌ token cache" not in result.output
+    assert "✅ token cache" not in result.output

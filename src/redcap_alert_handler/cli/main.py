@@ -13,6 +13,7 @@ from typing import Annotated
 
 import typer
 
+from redcap_alert_handler.cli.auth import auth
 from redcap_alert_handler.cli.conventions import (
     NoColorOption,
     QuietOption,
@@ -25,6 +26,7 @@ from redcap_alert_handler.cli.doctor import doctor
 app = typer.Typer(name="rah")
 logger = get_logger(__name__)
 
+app.command(name="auth")(auth)
 app.command(name="doctor")(doctor)
 
 

@@ -1,0 +1,12 @@
+{
+    "Account": {
+        "uid.utid-login.microsoftonline.com-11111111-1111-1111-1111-111111111111": {
+            "home_account_id": "uid.utid",
+            "environment": "login.microsoftonline.com",
+            "realm": "11111111-1111-1111-1111-111111111111",
+            "local_account_id": "uid",
+            "username": "svc-rah@example.edu",
+            "authority_type": "MSSTS"
+        }
+    }
+}

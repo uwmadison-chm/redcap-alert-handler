@@ -38,6 +38,18 @@ SecretsOption = Annotated[
     ),
 ]
 
+# auth can't do anything without credentials, so its secrets flag is
+# required. Same flag, envvar, and help as SecretsOption -- only the
+# optionality differs.
+RequiredSecretsOption = Annotated[
+    Path,
+    typer.Option(
+        "--secrets",
+        envvar="RAH_SECRETS",
+        help="Path to the secrets TOML file.",
+    ),
+]
+
 # The logging flags live on the root callback *and* on each subcommand, so
 # both `rah -v doctor` and `rah doctor -v` work. The root configures logging
 # first; a subcommand reconfigures only when one of its own flags was set,
