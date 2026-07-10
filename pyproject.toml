@@ -1,19 +1,44 @@
 [project]
 name = "redcap-alert-handler"
 version = "0.1.0"
-description = "Add your description here"
+description = "Processes REDCap alerts using an O365 mailbox as a durable message queue"
 readme = "README.md"
 authors = [
     { name = "Nate Vack", email = "njvack@wisc.edu" }
 ]
-requires-python = ">=3.13"
+requires-python = ">=3.14"
 dependencies = [
-    "rust-just>=1.55.1",
+    "typer>=0.26",
 ]
 
 [project.scripts]
-redcap-alert-handler = "redcap_alert_handler:main"
+rah = "redcap_alert_handler.cli.main:main"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15",
+    "ty>=0.0.57",
+    "pytest>=9.1",
+    "pytest-xdist>=3.8",
+    "rust-just>=1.55",
+]
 
 [build-system]
 requires = ["uv_build>=0.11.14,<0.12.0"]
 build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["redcap_alert_handler"]
+
+[tool.ty.environment]
+python-version = "3.14"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

@@ -1,2 +1,1 @@
-def main() -> None:
-    print("Hello from redcap-alert-handler!")
+"""REDCap Alert Handler: processes REDCap alert email as a durable message queue."""

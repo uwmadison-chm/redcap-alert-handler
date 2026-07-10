@@ -45,9 +45,17 @@ Most other configuation information should be in the configuration TOML file.
 * Dates & times should be specified in ISO format
 * Durations and quantities (if needed) should be specifiable in human-readable format (3h -> 3 hours). Note `humanfriendly` parses sizes as decimal by default: 4K -> 4000, 4KiB -> 4096. Take the default.
 
+## Comments and Docstrings
+
+Comments should be concise and explain why a particular decision was made in a context.
+
+Function docstrings should also be concise, in Google style (without typing), and intended for the authors of this package. The product here is the CLI; other package authors are very unlikely to import functions from this package. Particularly do not list parameter or return types; we have type hinting for that.
+
+Exception: the handler contract (step 5) *is* imported by handler packages, so its docstrings are reference-grade -- especially `Raises:`, since the exception hierarchy is the handler API's control flow.
+
 ## 0. Scaffold and CLI framing
 
-* `uv init` a Python 3.14 project; `pyproject.toml` with `[project.scripts] rah = "redcap_alert_handler.cli:main"`.
+* `uv init` a Python 3.14 project; `pyproject.toml` with `[project.scripts] rah = "redcap_alert_handler.cli.main:main"`. Keep `cli/__init__.py` empty; the app and entry point live in `cli/main.py` so future endpoint modules can import `app` without a circular import through the package `__init__`.
 * typer group with `--version` and `-h/--help`; subcommands stubbed as they arrive.
 * CLI conventions module, shared across endpoints
   * data > stdout, messages/logs > stderr;
@@ -56,9 +64,10 @@ Most other configuation information should be in the configuration TOML file.
   * color off when not a TTY or options / env requires
 * `ruff`, `ty`, `pytest` configured and passing in a pre-commit-or-CI check.
 * `rust-just` installed (`rust-just` in pypi) and a justfile with working recipes for common development tasks for testing, linting, formatting, and type checking
-* Expect `just` to be available in $PATH, so `just test` and `just format` should... "just" work 
+* Expect `just` to be available in $PATH, so `just test` and `just reformat` should... "just" work
+* Bare `just` runs the default `check` recipe: the mutating local dev loop (sync, reformat, lint, typecheck, test). `safe-check` is the non-mutating variant for CI.
 
-**Done when:** `uv run rah --help` renders sensible help; `just lint`, `just format`, and a trivial `just test` pass. 
+**Done when:** `uv run rah --help` renders sensible help; bare `just` and `uv run just safe-check` both pass. 
 
 ## 1. Config and secrets models
 

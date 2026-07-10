@@ -125,7 +125,7 @@ Deployment composes three kinds of package:
 [project]
 name = "our-rah"
 dependencies = [
-  "rah @ git+https://github.com/your-org/rah.git@v0.3.0",
+  "redcap-alert-handler @ git+https://github.com/your-org/rah.git@v0.3.0",
   "study-acme-handlers @ git+ssh://git@github.com/your-org/study-acme-handlers.git@v1.2.0",
   "study-beta-handlers @ git+ssh://git@github.com/your-org/study-beta-handlers.git@v0.4.1",
 ]
@@ -135,7 +135,7 @@ dependencies = [
 
 How the pieces resolve:
 
-* **`rah`** — pinned as `rah @ git+https://…@vX.Y.Z`. Because the repo is public, this is an unauthenticated HTTPS clone (no key needed). If `rah` is ever published to PyPI, this simplifies to a plain `"rah"` version spec.
+* **`rah`** — pinned as `redcap-alert-handler @ git+https://…@vX.Y.Z`. Because the repo is public, this is an unauthenticated HTTPS clone (no key needed). If `rah` is ever published to PyPI, this simplifies to a plain `"redcap-alert-handler"` version spec.
 * **Handler packages** — private ones pinned as `… @ git+ssh://git@github.com/…@vX.Y.Z`; uv clones over SSH, so private-repo access is just the box's deploy key or the operator's SSH agent — nothing public, no package registry to run. Public handler packages resolve like `rah` itself: unauthenticated HTTPS git pins, or a plain version spec if published to PyPI. Pinning to a tag or commit gives reproducible deploys either way. (A private index — Azure Artifacts, self-hosted PyPI — is an option later but is more infra than this scale needs.)
 * **Dev loop** — for handler development, swap a git pin for an editable path install (`uv add --editable ../study-acme-handlers`) so source edits land on the next `watch` restart without reinstalling.
 
