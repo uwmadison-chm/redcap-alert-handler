@@ -107,7 +107,7 @@ class _LineHandler(logging.Handler):
             self.handleError(record)
             return
         style = _LEVEL_STYLES.get(record.levelno)
-        self._console.print(message, style=style, highlight=False, soft_wrap=True)
+        self._console.print(message, style=style, highlight=False, soft_wrap=True, markup=False)
 
 
 def setup_logging(verbose: bool, quiet: bool, no_color: bool) -> None:
@@ -130,5 +130,5 @@ def configure_logging(level: int, use_color: bool, stream: TextIO | None = None)
 
     console = Console(file=stream, no_color=not use_color)
     handler = _LineHandler(console)
-    handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+    handler.setFormatter(logging.Formatter("%(message)s"))
     logger.addHandler(handler)
