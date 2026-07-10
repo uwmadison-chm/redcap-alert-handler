@@ -1,0 +1,6 @@
+[global]
+token_cache_path = "/var/lib/rah/token-cache.json"
+state_base_dir = "/var/lib/rah/state"
+
+[routes.simple]
+handler = "rah.handlers:log_message"

@@ -1,0 +1,2 @@
+[routes.simple]
+handler = "rah.handlers:log_message"

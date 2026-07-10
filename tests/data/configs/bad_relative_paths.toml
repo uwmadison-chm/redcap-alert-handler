@@ -1,0 +1,12 @@
+[global]
+mailbox = "svc-rah@example.edu"
+token_cache_path = "var/lib/rah/token-cache.json"
+state_base_dir = "state"
+polling_interval = "5s"
+handler_timeout = "60s"
+max_retries = 5
+retry_backoff = "5m"
+max_age = "1d"
+
+[routes.simple]
+handler = "rah.handlers:log_message"

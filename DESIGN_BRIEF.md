@@ -26,7 +26,7 @@ When configured correctly this handles data in a HIPAA-compliant way. In our env
 
 ## Design Overview
 
-The main process is `rah watch`: a single long-running foreground process that polls the mailbox's inbox over the Microsoft Graph REST API and dispatches messages to handlers. It does not daemonize — it runs in the foreground, logs to stdout/stderr, and leaves process management to systemd (or to the operator's terminal in the dev loop). There is no webhook, no public endpoint, and no Graph change-notification subscription (see "Why Polling, Not Webhooks" below).
+The main process is `rah watch`: a single long-running foreground process that polls the mailbox's inbox (or a configured base folder standing in for it -- handy for testing against a folder in a personal account) over the Microsoft Graph REST API and dispatches messages to handlers. It does not daemonize — it runs in the foreground, logs to stdout/stderr, and leaves process management to systemd (or to the operator's terminal in the dev loop). There is no webhook, no public endpoint, and no Graph change-notification subscription (see "Why Polling, Not Webhooks" below).
 
 The poll is stateless. Because processed messages are always moved *out* of the inbox, the inbox itself is the work queue: each cycle lists the inbox and acts on what it finds. There is no delta token or cursor to persist, corrupt, or lose, and in steady state the folder is near-empty, so a poll is one cheap request.
 
@@ -168,7 +168,7 @@ There is **no** processing-order guarantee (arrival order is not processing orde
 
 ## Configuration, Secrets, and Tokens
 
-* **Main config** — route definitions and operational policy: slugs, handler refs, per-route timeouts, max-age, and any handler-specific keys (storage paths, model identifiers, …). Contains no credentials; committable.
+* **Main config** — route definitions and operational policy: slugs, handler refs, the (global) handler timeout, max-age, and any handler-specific keys (storage paths, model identifiers, …). Contains no credentials; committable.
 * **Secrets file** — a separate TOML file holding tenant/client IDs and the client secret. Mode `0440`, owned by the service user / group, never committed.
 * **Token store** — `msal`'s serialized token cache, at the location given in the main config. Mode `0600`, owned by the service user, never committed.
 

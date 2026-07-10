@@ -14,14 +14,18 @@ from typing import Annotated
 import typer
 
 from redcap_alert_handler.cli.conventions import (
-    configure_logging,
+    NoColorOption,
+    QuietOption,
+    VerboseOption,
     get_logger,
-    resolve_log_level,
-    resolve_use_color,
+    setup_logging,
 )
+from redcap_alert_handler.cli.doctor import doctor
 
 app = typer.Typer(name="rah")
 logger = get_logger(__name__)
+
+app.command(name="doctor")(doctor)
 
 
 def _print_version(value: bool) -> None:
@@ -34,13 +38,9 @@ def _print_version(value: bool) -> None:
 @app.callback(invoke_without_command=True)
 def main_callback(
     ctx: typer.Context,
-    verbose: Annotated[
-        bool, typer.Option("--verbose", "-v", help="Set log level to DEBUG.")
-    ] = False,
-    quiet: Annotated[bool, typer.Option("--quiet", "-q", help="Set log level to ERROR.")] = False,
-    no_color: Annotated[
-        bool, typer.Option("--no-color", help="Turn off color in logging.")
-    ] = False,
+    verbose: VerboseOption = False,
+    quiet: QuietOption = False,
+    no_color: NoColorOption = False,
     version: Annotated[
         bool,
         typer.Option(
@@ -52,15 +52,11 @@ def main_callback(
     ] = False,
 ) -> None:
     """Process REDCap emails from an O365 mailbox."""
-    level, warning = resolve_log_level(verbose, quiet)
-    use_color = resolve_use_color(no_color, sys.stderr)
-    configure_logging(level, use_color)
-    if warning:
-        logger.warning(warning)
+    setup_logging(verbose, quiet, no_color)
 
-    # No subcommands exist yet (step 0). Typer's no_args_is_help exits 2 on a
-    # bare invocation, which reads as a usage error rather than plain help,
-    # so we print help and exit clean ourselves.
+    # Typer's no_args_is_help exits 2 on a bare invocation, which reads as a
+    # usage error rather than plain help, so we print help and exit clean
+    # ourselves.
     if ctx.invoked_subcommand is None:
         typer.echo(ctx.get_help())
         raise typer.Exit()

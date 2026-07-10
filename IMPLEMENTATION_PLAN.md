@@ -84,34 +84,38 @@ Most configuration is stored in the TOML-based config file, rather than passed a
 * `tomllib` + plain frozen dataclasses (no config-framework dependency).
 * The file contains a global section and a routes section keyed on slug.
 * Global configuration contains:
+  * mailbox (the service-account mailbox's UPN/address; Graph's `/users/{...}` also takes the GUID, so either works). Delegated auth already picks the mailbox via the token; this key exists so doctor can catch "authed as X, config expects Y".
+  * base_folder (optional, default `"inbox"`) -- the folder the watcher polls; slug folders and `dead-letters` live under it. A named folder here lets a dev setup run against a folder in a personal account instead of a dedicated mailbox.
   * token cache path (absolute)
   * state base dir (absolute)
   * polling interval
   * handler timeout
-  * retry / backoff settings
+  * retry / backoff settings: `max_retries` (a non-negative int) and `retry_backoff` (a duration)
   * max_age (the default for routes that don't set their own)
+  * durations in the config file accept humanfriendly strings (`"5s"`, `"3h"`) or bare TOML numbers meaning seconds
 * Route-specific config is a mapping keyed on slug and containing at least a handler reference; `max_age` may be set per-route, overriding the global default. Other keys are passed as part of the context to the handler, preserved opaquely per the brief. Global keys are included in the context; route-specific keys override. Handlers are responsible for handling their own validation and must ignore irrelevant context information.
 * Slugs must look like ASCII Python identifiers (`[A-Za-z_][A-Za-z0-9_]*`) and match subjects case-sensitively. Enforce this in validation: slugs become mailbox folder names, and folder creation is a bad time to find out one contains a `/`.
 * The secrets file path is *not* in the config file -- under systemd credentials it isn't known until the service starts. Resolution order is in "Universal CLI Options" above.
-* Secrets file is TOML and contains info needed for auth: tenant ID, client ID, and client secret (we're a confidential client -- see `rah auth`)
+* Secrets file is TOML and contains info needed for auth: tenant ID, client ID, and client secret (we're a confidential client -- see `rah auth`). Optionally `client_secret_expires`, a TOML date copied from the portal when the secret is made -- Azure won't reveal it to us without `Application.Read.All`, so it's self-reported; doctor warns within 30 days and fails the secrets check once it's past.
 * Token cache lives at the path given in the main config, in whatever format is easiest for `msal` to deal with
 
 Validation errors are the project's first UX surface: report *all* problems, one per line, with the offending key path; exit 1
 
-`rah doctor -v` should display a pretty-printed configuration as part of its output. `rah doctor -q` should display only errors.
+This also a good step to stub out `rah doctor`, I think. `rah doctor -v` should display a pretty-printed configuration hash as part of its output. `rah doctor -q` should display only errors.
 
-**Done when:** table-driven tests cover good/bad configs; error output reads like advice, not a traceback.
+**Done when:** table-driven tests cover good/bad configs; error output reads like advice, not a traceback. `rah doctor -v` shows the loaded config; `rah doctor -q` only prints errors, `rah doctor` with no verbosity option prints major check results (eg, "✅ config okay" at this stage)
 
 ## 2. `rah auth`
 
 * `msal` delegated auth-code flow as a confidential client -- our tenant doesn't let us register public clients, which rules out device code and is why the secrets file carries a client secret.
 * No localhost listener. `rah auth` prints the authorization URL; the operator opens it in a browser wherever convenient, signs in as the service account, and pastes the resulting redirect URL back into the prompt. This works over SSH, which is the expected case.
 * The registered redirect URI never has to be served -- the browser's failed navigation to it still carries the auth code in the address bar. `msal`'s `initiate_auth_code_flow` / `acquire_token_by_auth_code_flow` handle the state check and code redemption.
+* App registration (single tenant, platform Web, public client flows off): redirect URI is exactly `http://localhost/auth`, which rah hardcodes -- the two must match character for character. Delegated scopes: `Mail.ReadWrite` (all message/folder work), `MailboxSettings.ReadWrite` (seeding the master category list only), `User.Read` (doctor's who-am-I check). msal adds `offline_access`/`openid`/`profile` itself; don't request them explicitly.
 * Writes the serialized token cache to the path from the main config, mode `0600`.
 * On success, print the signed-in account and token expiry as INFO. Single-purpose: no health checks here (that's `doctor`).
 * Silent-refresh path (`acquire_token_silent`) factored so `watch` reuses it later -- probably in `redcap_alert_handler/auth.py`
 
-**Done when:** a real token is acquired against the tenant; a second run refreshes silently from the cache; unit tests cover cache read/write with msal mocked.
+**Done when:** a real token is acquired against the tenant; a second run refreshes silently from the cache; unit tests cover cache read/write with msal mocked. `rah doctor` reports auth status.
 
 ## 3. Graph client module
 
