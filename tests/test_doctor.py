@@ -5,6 +5,7 @@
 from datetime import date, timedelta
 from pathlib import Path
 
+import httpx
 import pytest
 from typer.testing import CliRunner
 
@@ -87,9 +88,12 @@ def test_quiet_bad_config_still_shows_errors():
     assert "❌ config:" in result.output
 
 
-def test_good_secrets_reports_okay(write_config, cache_with_account, fake_app, install_fake_msal):
+def test_good_secrets_reports_okay(
+    write_config, cache_with_account, fake_app, install_fake_msal, install_fake_graph
+):
     config = write_config(cache_with_account)
     install_fake_msal(fake_app(accounts=ACCOUNTS, silent_result=REFRESHED))
+    install_fake_graph()
     result = runner.invoke(
         app,
         ["doctor", "--config", str(config), "--secrets", str(SECRETS / "good.toml")],
@@ -116,10 +120,11 @@ def test_bad_secrets_fails_the_run():
 
 
 def test_far_future_expiry_passes_without_warning(
-    write_config, cache_with_account, fake_app, install_fake_msal
+    write_config, cache_with_account, fake_app, install_fake_msal, install_fake_graph
 ):
     config = write_config(cache_with_account)
     install_fake_msal(fake_app(accounts=ACCOUNTS, silent_result=REFRESHED))
+    install_fake_graph()
     result = runner.invoke(
         app,
         ["doctor", "--config", str(config), "--secrets", str(SECRETS / "good_with_expiry.toml")],
@@ -148,7 +153,7 @@ def test_expired_secret_fails_the_run():
 
 
 def test_soon_expiring_secret_warns_but_passes(
-    tmp_path, write_config, cache_with_account, fake_app, install_fake_msal
+    tmp_path, write_config, cache_with_account, fake_app, install_fake_msal, install_fake_graph
 ):
     # The warning window is relative to today, so this fixture has to be
     # generated: the good secrets file plus a date two weeks out.
@@ -159,6 +164,7 @@ def test_soon_expiring_secret_warns_but_passes(
     )
     config = write_config(cache_with_account)
     install_fake_msal(fake_app(accounts=ACCOUNTS, silent_result=REFRESHED))
+    install_fake_graph()
     result = runner.invoke(
         app,
         ["doctor", "--config", str(config), "--secrets", str(secrets_file)],
@@ -197,10 +203,11 @@ def test_config_flag_beats_rah_config_env_var(write_config, cache_with_account):
 
 
 def test_rah_secrets_env_var_is_picked_up(
-    write_config, cache_with_account, fake_app, install_fake_msal
+    write_config, cache_with_account, fake_app, install_fake_msal, install_fake_graph
 ):
     config = write_config(cache_with_account)
     install_fake_msal(fake_app(accounts=ACCOUNTS, silent_result=REFRESHED))
+    install_fake_graph()
     result = runner.invoke(
         app,
         ["doctor", "--config", str(config)],
@@ -250,9 +257,12 @@ def test_cache_with_account_but_no_secrets_passes_with_a_note(write_config, cach
     )
 
 
-def test_refreshable_cache_passes(write_config, cache_with_account, fake_app, install_fake_msal):
+def test_refreshable_cache_passes(
+    write_config, cache_with_account, fake_app, install_fake_msal, install_fake_graph
+):
     config = write_config(cache_with_account)
     install_fake_msal(fake_app(accounts=ACCOUNTS, silent_result=REFRESHED))
+    install_fake_graph()
     result = runner.invoke(
         app,
         ["doctor", "--config", str(config), "--secrets", str(SECRETS / "good.toml")],
@@ -266,12 +276,13 @@ def test_refreshable_cache_passes(write_config, cache_with_account, fake_app, in
 
 
 def test_verbose_shows_token_validity(
-    write_config, cache_with_account, fake_app, install_fake_msal
+    write_config, cache_with_account, fake_app, install_fake_msal, install_fake_graph
 ):
     # msal reports the cached token's *remaining* life, so odd values like
     # 3541 are the norm; "59 minutes and 1 second" is more than anyone needs
     config = write_config(cache_with_account)
     install_fake_msal(fake_app(accounts=ACCOUNTS, silent_result={"expires_in": 3541}))
+    install_fake_graph()
     result = runner.invoke(
         app,
         ["doctor", "-v", "--config", str(config), "--secrets", str(SECRETS / "good.toml")],
@@ -302,3 +313,90 @@ def test_broken_config_skips_the_cache_check():
     assert result.exit_code == 1
     assert "❌ token cache" not in result.output
     assert "✅ token cache" not in result.output
+
+
+# --- the Graph check ---
+
+
+def test_healthy_mailbox_reports_count(
+    write_config, cache_with_account, fake_app, install_fake_msal, install_fake_graph
+):
+    # good_full sets base_folder = "rah", a child of the mailbox root.
+    config = write_config(cache_with_account, base="good_full.toml")
+    install_fake_msal(fake_app(accounts=ACCOUNTS, silent_result=REFRESHED))
+    fake = install_fake_graph()
+    rah = fake.add_folder("rah", parent_id=fake.root_id)
+    for i in range(4):
+        fake.add_message(rah["id"], subject=f"consent {i}")
+
+    result = runner.invoke(
+        app,
+        ["doctor", "--config", str(config), "--secrets", str(SECRETS / "good.toml")],
+        env=CLEAN_ENV,
+    )
+    assert result.exit_code == 0
+    assert "✅ graph okay: 4 messages in rah for svc-rah@example.edu" in result.output
+
+
+def test_inbox_base_folder_uses_the_well_known_inbox(
+    write_config, cache_with_account, fake_app, install_fake_msal, install_fake_graph
+):
+    # good_minimal leaves base_folder at its "inbox" default.
+    config = write_config(cache_with_account)
+    install_fake_msal(fake_app(accounts=ACCOUNTS, silent_result=REFRESHED))
+    fake = install_fake_graph()
+    fake.add_message(fake.inbox_id, subject="just one")
+
+    result = runner.invoke(
+        app,
+        ["doctor", "--config", str(config), "--secrets", str(SECRETS / "good.toml")],
+        env=CLEAN_ENV,
+    )
+    assert result.exit_code == 0
+    assert "✅ graph okay: 1 message in inbox for svc-rah@example.edu" in result.output
+
+
+def test_missing_base_folder_fails_with_a_clear_message(
+    write_config, cache_with_account, fake_app, install_fake_msal, install_fake_graph
+):
+    config = write_config(cache_with_account, base="good_full.toml")
+    install_fake_msal(fake_app(accounts=ACCOUNTS, silent_result=REFRESHED))
+    # No "rah" folder created, so resolving the base folder comes up empty.
+    install_fake_graph()
+
+    result = runner.invoke(
+        app,
+        ["doctor", "--config", str(config), "--secrets", str(SECRETS / "good.toml")],
+        env=CLEAN_ENV,
+    )
+    assert result.exit_code == 1
+    assert "❌ graph:" in result.output
+    assert "rah" in result.output
+
+
+def test_graph_unreachable_fails_without_a_traceback(
+    write_config, cache_with_account, fake_app, install_fake_msal, install_fake_graph
+):
+    config = write_config(cache_with_account)
+    install_fake_msal(fake_app(accounts=ACCOUNTS, silent_result=REFRESHED))
+    fake = install_fake_graph()
+    fake.enqueue_exception(httpx.ConnectError("no route to host"))
+
+    result = runner.invoke(
+        app,
+        ["doctor", "--config", str(config), "--secrets", str(SECRETS / "good.toml")],
+        env=CLEAN_ENV,
+    )
+    assert result.exit_code == 1
+    assert "❌ graph:" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_graph_skipped_without_a_refreshed_token(write_config, cache_with_account):
+    # No secrets given, so the token never refreshes and Graph can't be tried.
+    config = write_config(cache_with_account)
+    result = runner.invoke(app, ["doctor", "--config", str(config)], env=CLEAN_ENV)
+    assert result.exit_code == 0
+    assert "graph not checked" in result.output
+    assert "✅ graph" not in result.output
+    assert "❌ graph" not in result.output

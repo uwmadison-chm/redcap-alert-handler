@@ -1,0 +1,28 @@
+{
+  "id": "state-placeholder",
+  "parentFolderId": "inbox",
+  "subject": "consent|participant 5150",
+  "internetMessageId": "<redcap-0002@redcap.example.edu>",
+  "from": {
+    "emailAddress": { "name": "REDCap", "address": "redcap@example.edu" }
+  },
+  "sender": {
+    "emailAddress": { "name": "REDCap", "address": "redcap@example.edu" }
+  },
+  "receivedDateTime": "2026-07-09T14:02:33Z",
+  "categories": ["rah:processing"],
+  "singleValueExtendedProperties": [
+    {
+      "id": "String {66f5a359-4659-4830-9070-00047ec6ac6e} Name rah-retries-left",
+      "value": "3"
+    },
+    {
+      "id": "String {66f5a359-4659-4830-9070-00047ec6ac6e} Name rah-retry-time",
+      "value": "2026-07-09T15:00:00Z"
+    }
+  ],
+  "body": {
+    "contentType": "text",
+    "content": "slug = \"consent\"\n"
+  }
+}

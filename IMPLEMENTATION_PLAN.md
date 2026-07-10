@@ -125,14 +125,15 @@ The one thin wrapper (`msal` + `httpx`) everything else calls. Small, boring, he
 * 429/5xx retry honoring `Retry-After`.
 * **Testing backbone built here:** a fake Graph via `httpx.MockTransport` plus canned JSON fixtures. Every later integration test rides on this -- treat it as a first-class deliverable, not test scaffolding.
 * Once the fake Graph has its real shape, write a project skill (`.claude/skills/graph-testing/SKILL.md`) documenting how to test against it -- where fixtures live, how to register responses, common patterns. Steps 4-8 all lean on it, so capturing this at the end of step 3 pays for itself immediately.
+* `rah doctor` grows a Graph check here (pulled forward from step 4): when config, secrets, and a refreshed token are all in hand, it resolves the base folder and reports the mailbox and its message count at INFO. That line is the standing smoke test -- no throwaway script.
 
-**Done when:** all operations pass against the fake; a manual smoke run lists the real inbox.
+**Done when:** all operations pass against the fake; `rah doctor` against the real tenant reports the mailbox and its message count.
 
 ## 4. `rah doctor`
 
-* Checks, in order, reporting each: config parses; routes valid; every configured handler resolves to an installed entry point; secrets file readable; token cache present and refreshable; Graph reachable; mailbox folders (`{slug}/completed`, `{slug}/error`, `dead-letters`) exist; `rah:*` categories seeded.
+* Checks, in order, reporting each: config parses; routes valid; every configured handler resolves to an installed entry point; secrets file readable; token cache present and refreshable; mailbox folders (`{slug}/completed`, `{slug}/error`, `dead-letters`) exist; `rah:*` categories seeded. (Graph reachability is already covered by step 3's check.)
 * `--fix` idempotently provisions missing folders and categories (the answer to "who creates the folder layout": doctor, on demand -- not `watch` at startup).
-* `rah init` -- an alias for `rah doctor --fix`, because "run `rah init`" documents better than a repair flag. Same code path; the alias is the documented first-run step after `rah auth`.
+* `rah init` -- an alias for `rah doctor --fix`, because "run `rah init`" documents better than a repair flag. Same code path; the alias is the documented first-run step after `rah auth`. Once it exists, point the Graph check's missing-folder advice at it.
 * Human-readable output; `--json` for machines; exit 0 only if all checks pass, so it can back a cron or monitoring probe.
 * `-o`, `--output` to write to a file instead of stdout
 

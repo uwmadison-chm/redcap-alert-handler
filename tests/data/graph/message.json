@@ -1,0 +1,19 @@
+{
+  "id": "seed-placeholder",
+  "parentFolderId": "inbox",
+  "subject": "consent|participant 4021",
+  "internetMessageId": "<redcap-0001@redcap.example.edu>",
+  "from": {
+    "emailAddress": { "name": "REDCap", "address": "redcap@example.edu" }
+  },
+  "sender": {
+    "emailAddress": { "name": "REDCap", "address": "redcap@example.edu" }
+  },
+  "receivedDateTime": "2026-07-09T13:45:12Z",
+  "categories": [],
+  "singleValueExtendedProperties": [],
+  "body": {
+    "contentType": "text",
+    "content": "slug = \"consent\"\n"
+  }
+}

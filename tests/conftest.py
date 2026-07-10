@@ -103,6 +103,76 @@ def empty_cache(tmp_path):
 
 
 @pytest.fixture
+def fake_graph():
+    """A fresh in-memory Graph mailbox, seeded with just the well-known folders.
+
+    It's a plain object, not a factory: mutate page_size or add folders and
+    messages on it before wiring a client to fake_graph.transport().
+    """
+    from fake_graph import FakeGraph
+
+    return FakeGraph()
+
+
+@pytest.fixture
+def sleep_spy():
+    """A stand-in for time.sleep that records what it was asked to wait."""
+
+    class Spy:
+        def __init__(self):
+            self.calls = []
+
+        def __call__(self, seconds):
+            self.calls.append(seconds)
+
+    return Spy()
+
+
+@pytest.fixture
+def graph_client(fake_graph, sleep_spy):
+    """A GraphClient wired to fake_graph, with a recording sleep and static token."""
+    from redcap_alert_handler.graph import GraphClient
+
+    with GraphClient(
+        fake_graph.mailbox,
+        get_token=lambda: "test-token",
+        transport=fake_graph.transport(),
+        sleep=sleep_spy,
+    ) as client:
+        yield client
+
+
+@pytest.fixture
+def install_fake_graph(monkeypatch):
+    """Patch doctor's GraphClient so its Graph check runs against a fake mailbox.
+
+    Same idea as install_fake_msal: swap the name doctor constructs so nothing
+    reaches the network. Pass a FakeGraph to seed state, or take the default.
+    """
+
+    def install(fake=None):
+        from fake_graph import FakeGraph
+
+        import redcap_alert_handler.cli.doctor
+        from redcap_alert_handler.graph import GraphClient
+
+        fake = fake if fake is not None else FakeGraph()
+
+        def factory(mailbox, get_token, **kwargs):
+            return GraphClient(
+                mailbox,
+                get_token=get_token,
+                transport=fake.transport(),
+                sleep=lambda seconds: None,
+            )
+
+        monkeypatch.setattr(redcap_alert_handler.cli.doctor, "GraphClient", factory)
+        return fake
+
+    return install
+
+
+@pytest.fixture
 def write_config(tmp_path):
     """Write a fixture config into tmp_path with token_cache_path swapped.
 

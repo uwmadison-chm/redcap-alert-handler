@@ -1,0 +1,288 @@
+# This file is part of rah, the REDCap Alert Handler.
+# Copyright (c) Board of Regents of the University of Wisconsin System
+# Distributed under the MIT license; see LICENSE in the project root.
+
+import httpx
+import pytest
+
+from redcap_alert_handler.graph import GraphClient, GraphError
+
+# The two extended-property ids the state fixture carries.
+RETRIES_LEFT = "String {66f5a359-4659-4830-9070-00047ec6ac6e} Name rah-retries-left"
+RETRY_TIME = "String {66f5a359-4659-4830-9070-00047ec6ac6e} Name rah-retry-time"
+
+
+# --- listing and paging ---
+
+
+def test_list_messages_returns_the_folder_contents(fake_graph, graph_client):
+    fake_graph.add_message(fake_graph.inbox_id, subject="one")
+    fake_graph.add_message(fake_graph.inbox_id, subject="two")
+
+    messages = graph_client.list_messages(fake_graph.inbox_id)
+
+    assert [m["subject"] for m in messages] == ["one", "two"]
+
+
+def test_list_messages_resolves_the_inbox_alias(fake_graph, graph_client):
+    fake_graph.add_message(fake_graph.inbox_id, subject="hi")
+
+    # "inbox" is the well-known name, not the opaque folder id.
+    messages = graph_client.list_messages("inbox")
+
+    assert len(messages) == 1
+
+
+def test_list_messages_ignores_other_folders(fake_graph, graph_client):
+    other = fake_graph.add_folder("errors", parent_id=fake_graph.root_id)
+    fake_graph.add_message(fake_graph.inbox_id, subject="mine")
+    fake_graph.add_message(other["id"], subject="theirs")
+
+    messages = graph_client.list_messages(fake_graph.inbox_id)
+
+    assert [m["subject"] for m in messages] == ["mine"]
+
+
+def test_list_messages_follows_next_link(fake_graph, graph_client):
+    fake_graph.page_size = 2
+    for i in range(5):
+        fake_graph.add_message(fake_graph.inbox_id, subject=f"m{i}")
+
+    messages = graph_client.list_messages(fake_graph.inbox_id)
+
+    assert len(messages) == 5
+    # 5 messages at 2 per page is three GETs against the messages endpoint.
+    list_gets = [r for r in fake_graph.requests if "/messages" in r[1] and r[0] == "GET"]
+    assert len(list_gets) == 3
+
+
+def test_list_messages_expands_extended_properties(fake_graph, graph_client):
+    fake_graph.add_message(fake_graph.inbox_id, fixture="message_with_state.json")
+
+    messages = graph_client.list_messages(
+        fake_graph.inbox_id, expand_properties=(RETRIES_LEFT, RETRY_TIME)
+    )
+
+    props = {p["id"]: p["value"] for p in messages[0]["singleValueExtendedProperties"]}
+    assert props[RETRIES_LEFT] == "3"
+    assert props[RETRY_TIME] == "2026-07-09T15:00:00Z"
+
+
+def test_list_messages_omits_properties_without_expand(fake_graph, graph_client):
+    fake_graph.add_message(fake_graph.inbox_id, fixture="message_with_state.json")
+
+    messages = graph_client.list_messages(fake_graph.inbox_id)
+
+    assert "singleValueExtendedProperties" not in messages[0]
+
+
+# --- getting one message ---
+
+
+def test_get_message_returns_it(fake_graph, graph_client):
+    added = fake_graph.add_message(fake_graph.inbox_id, subject="find me")
+
+    message = graph_client.get_message(added["id"])
+
+    assert message["subject"] == "find me"
+
+
+def test_get_message_expand_round_trips(fake_graph, graph_client):
+    added = fake_graph.add_message(fake_graph.inbox_id, fixture="message_with_state.json")
+
+    message = graph_client.get_message(added["id"], expand_properties=(RETRIES_LEFT,))
+
+    props = {p["id"]: p["value"] for p in message["singleValueExtendedProperties"]}
+    assert props == {RETRIES_LEFT: "3"}
+
+
+def test_get_missing_message_raises(fake_graph, graph_client):
+    with pytest.raises(GraphError) as exc_info:
+        graph_client.get_message("nope")
+
+    assert exc_info.value.status == 404
+
+
+# --- patching ---
+
+
+def test_patch_sets_categories(fake_graph, graph_client):
+    added = fake_graph.add_message(fake_graph.inbox_id)
+
+    graph_client.patch_message(added["id"], categories=["rah:processing"])
+
+    assert fake_graph.messages[added["id"]]["categories"] == ["rah:processing"]
+
+
+def test_patch_sets_extended_properties(fake_graph, graph_client):
+    added = fake_graph.add_message(fake_graph.inbox_id)
+
+    graph_client.patch_message(added["id"], properties={RETRIES_LEFT: "2"})
+
+    stored = fake_graph.messages[added["id"]]["singleValueExtendedProperties"]
+    assert {"id": RETRIES_LEFT, "value": "2"} in stored
+
+
+# --- moving ---
+
+
+def test_move_returns_a_new_id(fake_graph, graph_client):
+    added = fake_graph.add_message(fake_graph.inbox_id, subject="moving")
+    destination = fake_graph.add_folder("completed", parent_id=fake_graph.root_id)
+
+    moved = graph_client.move_message(added["id"], destination["id"])
+
+    assert moved["id"] != added["id"]
+    assert moved["parentFolderId"] == destination["id"]
+    # The old id is gone; the new one resolves.
+    with pytest.raises(GraphError):
+        graph_client.get_message(added["id"])
+    assert graph_client.get_message(moved["id"])["subject"] == "moving"
+
+
+# --- folders ---
+
+
+def test_get_well_known_folder(fake_graph, graph_client):
+    folder = graph_client.get_well_known_folder("inbox")
+
+    assert folder["id"] == fake_graph.inbox_id
+
+
+def test_find_child_folder_hit(fake_graph, graph_client):
+    fake_graph.add_folder("rah", parent_id=fake_graph.root_id)
+
+    folder = graph_client.find_child_folder(fake_graph.root_id, "rah")
+
+    assert folder is not None
+    assert folder["displayName"] == "rah"
+
+
+def test_find_child_folder_miss_returns_none(fake_graph, graph_client):
+    assert graph_client.find_child_folder(fake_graph.root_id, "ghost") is None
+
+
+def test_create_child_folder(fake_graph, graph_client):
+    created = graph_client.create_child_folder(fake_graph.root_id, "dead-letters")
+
+    assert created["displayName"] == "dead-letters"
+    assert graph_client.find_child_folder(fake_graph.root_id, "dead-letters") is not None
+
+
+# --- categories ---
+
+
+def test_list_categories(fake_graph, graph_client):
+    fake_graph.add_category("rah:processing", "preset0")
+
+    categories = graph_client.list_categories()
+
+    assert [c["displayName"] for c in categories] == ["rah:processing"]
+
+
+def test_create_category(fake_graph, graph_client):
+    created = graph_client.create_category("rah:errored", "preset1")
+
+    assert created["displayName"] == "rah:errored"
+    assert created["color"] == "preset1"
+    assert len(fake_graph.categories) == 1
+
+
+# --- retry behavior ---
+
+
+def test_429_retries_after_the_retry_after_header(fake_graph, graph_client, sleep_spy):
+    fake_graph.add_message(fake_graph.inbox_id, subject="eventually")
+    fake_graph.enqueue_status(429, retry_after=2)
+
+    messages = graph_client.list_messages(fake_graph.inbox_id)
+
+    assert [m["subject"] for m in messages] == ["eventually"]
+    assert sleep_spy.calls == [2]
+
+
+def test_5xx_retries_with_a_default_backoff(fake_graph, graph_client, sleep_spy):
+    fake_graph.add_message(fake_graph.inbox_id, subject="ok now")
+    fake_graph.enqueue_status(503)
+
+    messages = graph_client.list_messages(fake_graph.inbox_id)
+
+    assert len(messages) == 1
+    # No Retry-After, so it fell back to the default and slept once.
+    assert len(sleep_spy.calls) == 1
+
+
+def test_retry_exhaustion_raises(fake_graph, graph_client, sleep_spy):
+    for _ in range(5):
+        fake_graph.enqueue_status(500)
+
+    with pytest.raises(GraphError) as exc_info:
+        graph_client.list_messages(fake_graph.inbox_id)
+
+    assert exc_info.value.status == 500
+    # Five attempts means four waits between them.
+    assert len(sleep_spy.calls) == 4
+
+
+def test_non_retryable_4xx_raises_without_retrying(fake_graph, graph_client, sleep_spy):
+    fake_graph.enqueue_status(403, json_body={"error": {"code": "ErrorAccessDenied"}})
+
+    with pytest.raises(GraphError) as exc_info:
+        graph_client.list_messages(fake_graph.inbox_id)
+
+    assert exc_info.value.status == 403
+    assert exc_info.value.code == "ErrorAccessDenied"
+    assert sleep_spy.calls == []
+
+
+def test_transport_error_becomes_graph_error(fake_graph, graph_client):
+    fake_graph.enqueue_exception(httpx.ConnectError("no route to host"))
+
+    with pytest.raises(GraphError) as exc_info:
+        graph_client.list_messages(fake_graph.inbox_id)
+
+    # A transport failure has no HTTP status to report.
+    assert exc_info.value.status is None
+
+
+def test_malformed_body_becomes_graph_error(fake_graph, graph_client):
+    fake_graph.enqueue_status(200, content=b"{ this is not json")
+
+    with pytest.raises(GraphError):
+        graph_client.list_messages(fake_graph.inbox_id)
+
+
+# --- plumbing ---
+
+
+def test_base_url_targets_the_configured_mailbox_not_me(fake_graph, graph_client):
+    graph_client.list_messages(fake_graph.inbox_id)
+
+    method, url = fake_graph.requests[0]
+    assert f"/v1.0/users/{fake_graph.mailbox}/" in url
+    assert "/me/" not in url
+
+
+def test_each_request_carries_a_bearer_token(fake_graph):
+    seen = {}
+
+    def capture(request):
+        seen["auth"] = request.headers.get("Authorization")
+        return httpx.Response(200, json={"value": []})
+
+    with GraphClient(
+        fake_graph.mailbox,
+        get_token=lambda: "shiny-token",
+        transport=httpx.MockTransport(capture),
+    ) as client:
+        client.list_messages("inbox")
+
+    assert seen["auth"] == "Bearer shiny-token"
+
+
+def test_close_is_idempotent(fake_graph):
+    client = GraphClient(
+        fake_graph.mailbox, get_token=lambda: "t", transport=fake_graph.transport()
+    )
+    client.close()
+    client.close()
