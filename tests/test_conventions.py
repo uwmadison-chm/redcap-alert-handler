@@ -7,7 +7,12 @@ import logging
 
 import pytest
 
-from redcap_alert_handler.cli.conventions import resolve_log_level, resolve_use_color
+from redcap_alert_handler.cli.conventions import (
+    LOGGER_NAME,
+    configure_logging,
+    resolve_log_level,
+    resolve_use_color,
+)
 
 
 class FakeTTY(io.StringIO):
@@ -64,3 +69,14 @@ def test_resolve_use_color_tty_with_nothing_disabling(monkeypatch):
     monkeypatch.delenv("NO_COLOR", raising=False)
     monkeypatch.delenv("RAH_NO_COLOR", raising=False)
     assert resolve_use_color(False, FakeTTY()) is True
+
+
+def test_logging_to_a_closed_stream_does_not_raise():
+    # A log handler can outlive its stream (CliRunner's captured stderr in
+    # tests; a vanished stderr under systemd). Logging must never crash the
+    # program that called it.
+    stream = io.StringIO()
+    configure_logging(logging.DEBUG, use_color=False, stream=stream)
+    stream.close()
+
+    logging.getLogger(LOGGER_NAME).debug("nobody is listening")

@@ -113,13 +113,14 @@ class _LineHandler(logging.Handler):
         self._console = console
 
     def emit(self, record: logging.LogRecord) -> None:
+        # Everything under try, like stdlib StreamHandler: a handler can
+        # outlive its stream, and logging must never take the program down.
         try:
             message = self.format(record)
+            style = _LEVEL_STYLES.get(record.levelno)
+            self._console.print(message, style=style, highlight=False, soft_wrap=True, markup=False)
         except Exception:
             self.handleError(record)
-            return
-        style = _LEVEL_STYLES.get(record.levelno)
-        self._console.print(message, style=style, highlight=False, soft_wrap=True, markup=False)
 
 
 def setup_logging(verbose: bool, quiet: bool, no_color: bool) -> None:

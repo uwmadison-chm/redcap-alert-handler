@@ -17,6 +17,26 @@ import pytest
 DATA = Path(__file__).parent / "data"
 
 
+@pytest.fixture(autouse=True)
+def reset_package_logger():
+    """Undo any logging configuration a test left on the global rah logger.
+
+    CLI invocations install a handler bound to CliRunner's captured stderr,
+    which is closed once the invoke returns. Without this reset, that dead
+    handler (and a lingering DEBUG level) leaks into whichever test logs next
+    on the same xdist worker.
+    """
+    yield
+    import logging
+
+    from redcap_alert_handler.cli.conventions import LOGGER_NAME
+
+    logger = logging.getLogger(LOGGER_NAME)
+    logger.handlers.clear()
+    logger.setLevel(logging.NOTSET)
+    logger.propagate = True
+
+
 class _FakeApp:
     """A stand-in for msal.ConfidentialClientApplication. No network, ever.
 
