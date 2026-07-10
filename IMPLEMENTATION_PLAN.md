@@ -98,6 +98,8 @@ Most configuration is stored in the TOML-based config file, rather than passed a
 
 Validation errors are the project's first UX surface: report *all* problems, one per line, with the offending key path; exit 1
 
+`rah doctor -v` should display a pretty-printed configuration as part of its output. `rah doctor -q` should display only errors.
+
 **Done when:** table-driven tests cover good/bad configs; error output reads like advice, not a traceback.
 
 ## 2. `rah auth`
@@ -118,6 +120,7 @@ The one thin wrapper (`msal` + `httpx`) everything else calls. Small, boring, he
 * Operations: list messages in a folder, get message with `$expand`ed single-value extended properties, patch properties/categories, move, find/create folders, seed the master category list.
 * 429/5xx retry honoring `Retry-After`.
 * **Testing backbone built here:** a fake Graph via `httpx.MockTransport` plus canned JSON fixtures. Every later integration test rides on this -- treat it as a first-class deliverable, not test scaffolding.
+* Once the fake Graph has its real shape, write a project skill (`.claude/skills/graph-testing/SKILL.md`) documenting how to test against it -- where fixtures live, how to register responses, common patterns. Steps 4-8 all lean on it, so capturing this at the end of step 3 pays for itself immediately.
 
 **Done when:** all operations pass against the fake; a manual smoke run lists the real inbox.
 
