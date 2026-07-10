@@ -11,6 +11,10 @@ dependencies = [
     "typer>=0.26",
 ]
 
+[project.urls]
+Homepage = "https://github.com/uwmadison-chm/redcap-alert-handler"
+Issues = "https://github.com/uwmadison-chm/redcap-alert-handler/issues"
+
 [project.scripts]
 rah = "redcap_alert_handler.cli.main:main"
 
