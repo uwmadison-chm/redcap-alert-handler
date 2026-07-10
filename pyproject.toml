@@ -24,7 +24,7 @@ rah = "redcap_alert_handler.cli.main:main"
 [dependency-groups]
 dev = [
     "ruff>=0.15",
-    "ty>=0.0.57",
+    "ty>=0.0.58",
     "pytest>=9.1",
     "pytest-xdist>=3.8",
     "rust-just>=1.55",
