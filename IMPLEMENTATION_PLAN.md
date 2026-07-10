@@ -53,6 +53,14 @@ Function docstrings should also be concise, in Google style (without typing), an
 
 Exception: the handler contract (step 5) *is* imported by handler packages, so its docstrings are reference-grade -- especially `Raises:`, since the exception hierarchy is the handler API's control flow.
 
+Every source file starts with this header (no year -- LICENSE holds the canonical notice):
+
+```python
+# This file is part of rah, the REDCap Alert Handler.
+# Copyright (c) Board of Regents of the University of Wisconsin System
+# Distributed under the MIT license; see LICENSE in the project root.
+```
+
 ## 0. Scaffold and CLI framing
 
 * `uv init` a Python 3.14 project; `pyproject.toml` with `[project.scripts] rah = "redcap_alert_handler.cli.main:main"`. Keep `cli/__init__.py` empty; the app and entry point live in `cli/main.py` so future endpoint modules can import `app` without a circular import through the package `__init__`.
