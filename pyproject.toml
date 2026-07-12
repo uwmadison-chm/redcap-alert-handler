@@ -52,3 +52,8 @@ python-version = "3.14"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+
+[tool.uv.workspace]
+members = [
+    "rah-example-randomizer",
+]
