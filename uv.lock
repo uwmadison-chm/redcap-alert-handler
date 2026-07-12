@@ -2,12 +2,6 @@ version = 1
 revision = 3
 requires-python = ">=3.14"
 
-[manifest]
-members = [
-    "rah-example-randomizer",
-    "redcap-alert-handler",
-]
-
 [[package]]
 name = "annotated-doc"
 version = "0.0.4"
@@ -389,29 +383,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/78/b4/439b179d1ff526791
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ca/31/d4e37e9e550c2b92a9cbc2e4d0b7420a27224968580b5a447f420847c975/pytest_xdist-3.8.0-py3-none-any.whl", hash = "sha256:202ca578cfeb7370784a8c33d6d05bc6e13b4f25b5053c30a152269fd10f0b88", size = 46396, upload-time = "2025-07-01T13:30:56.632Z" },
 ]
-
-[[package]]
-name = "rah-example-randomizer"
-version = "0.1.0"
-source = { editable = "rah-example-randomizer" }
-dependencies = [
-    { name = "httpx" },
-    { name = "redcap-alert-handler" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "pytest" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "httpx", specifier = ">=0.28.1" },
-    { name = "redcap-alert-handler", editable = "." },
-]
-
-[package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=9.1" }]
 
 [[package]]
 name = "redcap-alert-handler"
