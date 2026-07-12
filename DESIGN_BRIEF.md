@@ -83,7 +83,7 @@ Pre-seed the mailbox's master category list once so the `rah:*` labels render wi
 
 Because "side effect + move" is not transactional, a crash between a completed side effect and a completed move will cause reprocessing. Handlers must be idempotent; processing a message multiple times must not cause unintended effects. Handlers record that they have claimed a given `internet_message_id` in their own stores **before** performing the side effect, and do the right thing when a message comes around again. Claim-first biases external side effects toward at-most-once: a timed-out handler is abandoned, not killed (see Timeouts and Concurrency), so it may still finish its work after the engine has counted the attempt as failed — the recorded claim is what stops a retry from repeating it.
 
-Handlers may move messages to other folders (`completed`, for example) but this is purely a way to improve performance and let humans easily see what's going on rather than a way to prevent multiple actions on a message.
+All mailbox state changes — moves, extended properties, categories, the retries-left counter — belong to the engine, never to handlers. The contract gives handlers no Graph access at all (plain message and context values, no client), which is what keeps handler arguments picklable and the API client swappable. (Settled 2026-07-12, superseding an earlier idea of letting handlers move messages themselves.)
 
 ## Handler Contract
 
@@ -211,5 +211,5 @@ A timeout **abandons** a handler; it does not kill it — Python cannot kill a t
 
 ## Open Questions
 
-* Exact shape of the handler context object (the route slug and the route's full config entry — handler-specific keys included — are fixed requirements; what else it carries is open).
+* ~~Exact shape of the handler context object~~ Settled 2026-07-12: `Context` is the slug, one merged config mapping (`[global]` extras under the route's full entry, route keys winning; engine keys like `mailbox` excluded), and a per-route state directory (`state_base_dir/slug`). Keys in the mapping are opaque to the engine — a handler documents what it reads and ignores the rest.
 * `rah reprocess` selection semantics (everything? filter by route / age / folder?) and how replay interacts with max-age (a replayed message older than its route's max age would immediately re-expire).

@@ -145,9 +145,9 @@ The public, versioned, cross-repo API -- reviewed as such.
 
 * `HandlerError` / `TransientError` / `PermanentError` hierarchy.
 * `Message` frozen dataclass (`internet_message_id`, subject, text/HTML body, sender, received time) -- picklable, no Graph types.
-* `Context` (slug, full route config entry, per-route state dir; exact extra fields resolve the brief's open question here).
+* `Context` (slug, full route config entry, per-route state dir; exact extra fields resolve the brief's open question here). Settled 2026-07-12: slug, one merged config mapping (`[global]` extras under the route's full entry, route keys winning, engine keys excluded; opaque to the engine, stored as a plain dict for picklability), and `state_dir` = `state_base_dir/slug` (watch creates it before dispatch). Nothing else until a real handler needs it -- adding a field later is non-breaking.
 * Entry-point loader: resolve *all* configured handlers at startup, fail fast with a message naming the missing entry point and the route that wanted it. The config's handler reference is package-qualified (`package:name`, matching the installed distribution and its registered entry-point name) -- settled 2026-07-11 during step 4.
-* A built-in example handler shipped by `rah` itself under `rah.handlers` (e.g. one that just logs the message) -- proves the discovery machinery and powers end-to-end tests without a private handler package. (The `handlers.py` module and its `log_message` entry point were stubbed in step 4 so doctor's handler check has something to resolve; this step upgrades the body to the real contract.)
+* A built-in example handler shipped by `rah` itself under `rah.handlers` (e.g. one that just logs the message) -- proves the discovery machinery and powers end-to-end tests without a private handler package. (The `handlers.py` module and its `log_message` entry point were stubbed in step 4 so doctor's handler check has something to resolve; this step upgraded the body to the real contract and split `handlers.py` into a package -- exceptions in `handlers/errors.py`, `Message`/`Context` in `handlers/contract.py`, entry-point resolution in `handlers/loader.py`, built-ins in modules like `handlers/log_message.py`, with `handlers/__init__.py` re-exporting only the handler-author names -- `Message`, `Context`, and the exceptions, repeated at the package root -- while engine code imports the loader and `build_context` from their defining modules.)
 * A "Handler API" doc section with the semver promise from the brief, plus the handler-author rules: depend on `rah` with a wide version range (never a pin -- only the deployment project pins), and state the package's distribution name and handler names in its README, since `package:name` is the string operators copy into a route.
 
 **Done when:** the example handler is discovered through real `importlib.metadata` entry points in tests, not by monkeypatching.
@@ -193,5 +193,5 @@ The main event; everything above composes here.
 
 ## Cross-cutting
 
-* Version `0.x` with semver discipline on the handler API from step 5 onward; keep a changelog.
+* Version `0.x` with semver discipline on the handler API from step 5 onward. No changelog until there are real releases and the tool is practically useful (deferred 2026-07-12).
 * Nothing sensitive in logs at any level -- message subjects may carry participant-adjacent data, so DEBUG logs the `internet_message_id` and slug, not bodies.

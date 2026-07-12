@@ -43,7 +43,7 @@ from redcap_alert_handler.config import (
     load_secrets,
 )
 from redcap_alert_handler.graph import GraphClient, GraphError
-from redcap_alert_handler.handlers import HandlerResolutionError, resolve_handler
+from redcap_alert_handler.handlers.loader import HandlerResolutionError, load_handlers
 from redcap_alert_handler.mailbox import missing_categories, resolve_layout, seed_categories
 
 logger = get_logger(__name__)
@@ -219,24 +219,14 @@ def _check_handlers(config: Config | None) -> CheckResult:
             messages=("handlers not checked: the config didn't load",),
         )
 
-    # First-seen route order, one entry per unique handler name, remembering
-    # which routes asked for it so a failure can name them.
-    wanted_by: dict[str, list[str]] = {}
-    for slug, route in config.routes.items():
-        wanted_by.setdefault(route.handler, []).append(slug)
+    try:
+        load_handlers(config)
+    except HandlerResolutionError as e:
+        return CheckResult(name=name, passed=False, messages=tuple(e.problems))
 
-    problems: list[str] = []
-    for handler_name, slugs in wanted_by.items():
-        try:
-            resolve_handler(handler_name)
-        except HandlerResolutionError as e:
-            routes = ", ".join(f"routes.{slug}" for slug in slugs)
-            problems.append(f"{e} (wanted by {routes})")
-
-    if problems:
-        return CheckResult(name=name, passed=False, messages=tuple(problems))
-
-    count = len(wanted_by)
+    # "resolved" counts unique handler references, not routes -- two routes
+    # sharing one handler still report as one handler resolved.
+    count = len({route.handler for route in config.routes.values()})
     noun = "handler" if count == 1 else "handlers"
     return CheckResult(name=name, passed=True, detail=f"{count} {noun} resolved")
 

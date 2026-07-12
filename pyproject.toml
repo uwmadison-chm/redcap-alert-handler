@@ -22,7 +22,7 @@ Issues = "https://github.com/uwmadison-chm/redcap-alert-handler/issues"
 rah = "redcap_alert_handler.cli.main:main"
 
 [project.entry-points."rah.handlers"]
-log_message = "redcap_alert_handler.handlers:log_message"
+log_message = "redcap_alert_handler.handlers.log_message:log_message"
 
 [dependency-groups]
 dev = [
