@@ -41,7 +41,7 @@ The poll interval is set in the config file and overridable on the `rah watch` c
 The process reads a TOML config describing a collection of **routes**. Each route entry has at least:
 * a unique **slug** (the key);
 * a **maximum age**, so old mail isn't mishandled after an outage;
-* a **handler reference** (a registered entry-point name — see below). This is many-to-one: several routes may reference the same handler. A handler is not owned by a route and must not assume it serves exactly one.
+* a **handler reference** (a package-qualified entry-point reference, `"study-acme-handlers:consent"` — see below). This is many-to-one: several routes may reference the same handler. A handler is not owned by a route and must not assume it serves exactly one.
 * The config file will also include general configuration data, such as timeouts, the token cache path, and a base directory for routes' handlers to store state information. (Not the secrets file path — see Deployment; that path isn't knowable at config-writing time.)
 
 A route entry may also carry **handler-specific keys** (data storage paths, model identifiers, message templates, …). The engine validates only the keys it knows about and passes the full entry through to the handler opaquely — extra keys are the handler's business, not the engine's.
@@ -87,7 +87,7 @@ Handlers may move messages to other folders (`completed`, for example) but this 
 
 ## Handler Contract
 
-Handlers are **functions**, discovered as plugins via entry points. A handler package declares itself under the `rah.handlers` group in `pyproject.toml`; the loader uses `importlib.metadata.entry_points(group="rah.handlers")` to resolve a config-named handler. This gives install-time validation and avoids `sys.path` games. Entry points are the *only* discovery path — a handler must be a registered entry point in an installed package, full stop.
+Handlers are **functions**, discovered as plugins via entry points. A handler package declares itself under the `rah.handlers` group in `pyproject.toml`; the loader resolves the config's `package:name` reference against that group, matching the entry-point name and the distribution that registered it. This gives install-time validation and avoids `sys.path` games. Entry points are the *only* discovery path — a handler must be a registered entry point in an installed package, full stop.
 
 The handler receives:
 * a `rah`-owned message value — a plain immutable type carrying `internet_message_id`, subject, body (text and/or HTML), sender, and received time. Handlers never see Graph SDK types or raw REST payloads; this keeps the API client swappable and keeps handler arguments picklable (relevant if handlers ever move out of process).
@@ -117,7 +117,7 @@ The counter is decremented **before** the handler runs, claim-style: if a handle
 Deployment composes three kinds of package:
 
 * **`rah`** (public) — the engine. A normal Python package: defines the `rah.handlers` entry-point group as a contract, exposes the handler protocol and the `HandlerError` / `PermanentError` / `TransientError` hierarchy for handlers to import, ships the CLI. Knows nothing about any real study.
-* **Handler packages** — each its own uv project that depends on `rah`, registers its handlers under `rah.handlers`, and declares its own deps (e.g. an ML stack). Typically private, one per study or per group, because they encode internal study information — but nothing forces this: a generic handler with no study content (say, an email → web-push bridge) can be a public package like any other. Private vs. public is a property of each handler package's contents, not of the architecture. Versioned independently either way.
+* **Handler packages** — each its own uv project that depends on `rah` with a wide version range (`>=0.5,<1` style, never an exact pin — pinning is the deployment project's job, and two handler packages pinning different `rah` versions can't resolve into one environment), registers its handlers under `rah.handlers`, and declares its own deps (e.g. an ML stack). Typically private, one per study or per group, because they encode internal study information — but nothing forces this: a generic handler with no study content (say, an email → web-push bridge) can be a public package like any other. Private vs. public is a property of each handler package's contents, not of the architecture. Versioned independently either way.
 * **Deployment project** (`our-rah`, private) — a thin composition root with essentially no code of its own. Its only job is to pin the combination: a known `rah` version plus the handler packages this deployment runs.
 
 ```toml
@@ -143,7 +143,7 @@ The deployment project's **`uv.lock` is the deploy manifest**: the exact resolve
 
 Two consequences to keep straight:
 
-* **The entry-point contract is now a versioned, cross-repo API.** Once a handler repo pins `rah@v0.3.0` and does `from rah import TransientError`, changing the handler signature, the exception hierarchy, or the context object is a breaking change for repos `rah` may not see. Version that contract deliberately (semver + a documented "handler API" section), rather than letting it drift.
+* **The entry-point contract is now a versioned, cross-repo API.** Once a handler repo depends on `rah` and does `from redcap_alert_handler import TransientError`, changing the handler signature, the exception hierarchy, or the context object is a breaking change for repos `rah` may not see. Version that contract deliberately (semver + a documented "handler API" section), rather than letting it drift.
 * **Secrets live *around* the deployment project, not inside the pins.** `our-rah` pins *what code runs*; the runtime supplies what it runs against — the secrets file and deployment-specific paths (see the configuration split below). Keeping these separate lets the deployment project itself stay boring and committable without leaking credentials.
 
 Reminder from the handler-contract section: entry points are discovered at process start, so handlers are **not hot-reloadable**. "Deploy a handler" = install/pin + restart the service. Handlers run **in-process, on worker threads**; the known costs are acceptable at this scale. A native-code crash takes the watcher down — systemd restarts it, and decrement-first means the offending message dead-letters instead of looping. A timeout abandons rather than kills (see Timeouts and Concurrency). Because handler arguments are plain picklable values, moving to a process pool later — kill-able timeouts, crash isolation — is a contained swap, not a rewrite; likewise the subprocess-handler bridge (a thin in-env handler shelling out to a separately-managed venv) if incompatible dependency sets ever collide. Neither is worth building now.

@@ -8,6 +8,14 @@ an in-memory mailbox behind an `httpx.MockTransport`. No test hits the network,
 and no test sleeps for real. If you're writing code that lists, moves, or
 patches messages, you test it here.
 
+One blind spot to respect: the fake implements *our reading* of the Graph API,
+so it can't catch a misread. Step 4 shipped a category check against
+`/outlookCategories` with the fake happily serving that same wrong path; the
+real endpoint is `/outlook/masterCategories`, and only a run against the real
+tenant caught it. When client code grows a new endpoint, check the URL against
+the Graph docs and have Nate exercise it for real once before trusting the
+green tests.
+
 ## Getting a client
 
 Two conftest fixtures do the wiring:

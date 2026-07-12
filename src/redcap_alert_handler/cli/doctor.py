@@ -2,19 +2,23 @@
 # Copyright (c) Board of Regents of the University of Wisconsin System
 # Distributed under the MIT license; see LICENSE in the project root.
 
-"""`rah doctor`: local diagnostics, standing in for a /health endpoint.
+"""`rah doctor` and `rah init`: local diagnostics and mailbox provisioning.
 
-A small ordered list of checks, each returning pass/fail/skipped plus
-messages, so later steps (auth status, Graph reachability, folder layout)
-can append checks without reshaping this module.
+An ordered list of checks -- config, routes, handlers, secrets, token cache,
+graph, folders, categories -- each returning pass/fail/skipped plus messages.
+`doctor` reports; `init` (and `doctor --fix`) also creates the mailbox folders
+and categories the checks look for. Both run the same core so a check can
+never mean one thing to one command and something else to the other.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Annotated
 
 import humanfriendly
 import typer
@@ -30,14 +34,38 @@ from redcap_alert_handler.cli.conventions import (
     get_logger,
     setup_logging,
 )
-from redcap_alert_handler.config import Config, ConfigError, Secrets, load_config, load_secrets
+from redcap_alert_handler.config import (
+    Config,
+    ConfigError,
+    GlobalConfig,
+    Secrets,
+    load_config,
+    load_secrets,
+)
 from redcap_alert_handler.graph import GraphClient, GraphError
+from redcap_alert_handler.handlers import HandlerResolutionError, resolve_handler
+from redcap_alert_handler.mailbox import missing_categories, resolve_layout, seed_categories
 
 logger = get_logger(__name__)
 
 # How close a self-reported client-secret expiry gets before doctor starts
 # warning about it.
 _SECRET_EXPIRY_WARNING_WINDOW = timedelta(days=30)
+
+FixOption = Annotated[
+    bool,
+    typer.Option("--fix", help="Create missing mailbox folders and categories."),
+]
+
+JsonOption = Annotated[
+    bool,
+    typer.Option("--json", help="Write a machine-readable report to stdout."),
+]
+
+OutputOption = Annotated[
+    Path | None,
+    typer.Option("--output", "-o", help="Write the report to a file instead of the terminal."),
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,47 +89,159 @@ class CheckResult:
 def doctor(
     config: ConfigOption,
     secrets: SecretsOption = None,
+    fix: FixOption = False,
+    json_output: JsonOption = False,
+    output: OutputOption = None,
     verbose: VerboseOption = False,
     quiet: QuietOption = False,
     no_color: NoColorOption = False,
 ) -> None:
     """Check the config, the secrets if given, the token cache, and the mailbox.
 
-    The Graph check only runs when config, secrets, and a fresh token are all
-    in hand; otherwise it's skipped rather than failed. Exits 0 if every check
-    that ran passed, 1 if any failed.
+    Runs the full check list and reports each result. Graph-side checks only
+    run when config, secrets, and a fresh token are all in hand; otherwise
+    they're skipped rather than failed. With --fix, missing mailbox folders
+    and categories are created. Exits 0 if every check that ran passed, 1 if
+    any failed.
     """
+    _run_doctor(config, secrets, fix, json_output, output, verbose, quiet, no_color)
+
+
+def init(
+    config: ConfigOption,
+    secrets: SecretsOption = None,
+    json_output: JsonOption = False,
+    output: OutputOption = None,
+    verbose: VerboseOption = False,
+    quiet: QuietOption = False,
+    no_color: NoColorOption = False,
+) -> None:
+    """Provision the mailbox: create the rah folders and categories it needs.
+
+    The documented first-run step after `rah auth`. This is `doctor --fix`
+    under a friendlier name -- it runs the same checks and creates whatever's
+    missing.
+    """
+    _run_doctor(config, secrets, True, json_output, output, verbose, quiet, no_color)
+
+
+def _run_doctor(
+    config: Path,
+    secrets: Path | None,
+    fix: bool,
+    json_output: bool,
+    output: Path | None,
+    verbose: bool,
+    quiet: bool,
+    no_color: bool,
+) -> None:
     # The root callback already configured logging; only reconfigure when one
-    # of doctor's own flags was set, so the flag closest to the command wins.
+    # of the subcommand's own flags was set, so the flag closest to the
+    # command wins.
     if verbose or quiet or no_color:
         setup_logging(verbose, quiet, no_color)
 
-    config_result, loaded_config = _check_config(config)
-    _report(config_result)
-
+    config_result, routes_result, loaded_config = _check_config_and_routes(config)
+    handlers_result = _check_handlers(loaded_config)
     secrets_result, loaded_secrets = _check_secrets(secrets)
-    _report(secrets_result)
-
     cache_result, token_result = _check_token_cache(loaded_config, loaded_secrets)
-    _report(cache_result)
+    graph_result, folders_result, categories_result = _run_graph_checks(
+        loaded_config, loaded_secrets, token_result, fix
+    )
 
-    graph_result = _check_graph(loaded_config, loaded_secrets, token_result)
-    _report(graph_result)
+    results = (
+        config_result,
+        routes_result,
+        handlers_result,
+        secrets_result,
+        cache_result,
+        graph_result,
+        folders_result,
+        categories_result,
+    )
+    for result in results:
+        _report(result)
 
     if loaded_config is not None and logger.isEnabledFor(logging.DEBUG):
         logger.debug("loaded config:\n%s", pretty_repr(loaded_config))
 
-    results = (config_result, secrets_result, cache_result, graph_result)
+    _emit_report(results, json_output, output)
+
     if any(result.passed is False for result in results):
         raise typer.Exit(1)
 
 
-def _check_config(path: Path) -> tuple[CheckResult, Config | None]:
+# -- config and routes ----------------------------------------------------
+
+
+def _check_config_and_routes(path: Path) -> tuple[CheckResult, CheckResult, Config | None]:
     try:
         config = load_config(path)
     except ConfigError as e:
-        return CheckResult(name="config", passed=False, messages=tuple(e.problems)), None
-    return CheckResult(name="config", passed=True), config
+        # One ConfigError carries every problem; the route ones belong to the
+        # routes check, the rest to config. Config passes if the only thing
+        # that broke was routes -- [global] was fine, it just couldn't finish.
+        route_problems = tuple(p for p in e.problems if p.startswith("routes"))
+        other_problems = tuple(p for p in e.problems if not p.startswith("routes"))
+        if other_problems:
+            config_result = CheckResult(name="config", passed=False, messages=other_problems)
+        else:
+            config_result = CheckResult(name="config", passed=True)
+        if route_problems:
+            routes_result = CheckResult(name="routes", passed=False, messages=route_problems)
+        else:
+            routes_result = CheckResult(
+                name="routes",
+                passed=None,
+                messages=("routes not checked: the config didn't load",),
+            )
+        return config_result, routes_result, None
+
+    slugs = list(config.routes)
+    noun = "route" if len(slugs) == 1 else "routes"
+    routes_result = CheckResult(
+        name="routes",
+        passed=True,
+        detail=f"{len(slugs)} {noun}: {', '.join(slugs)}",
+    )
+    return CheckResult(name="config", passed=True), routes_result, config
+
+
+# -- handlers -------------------------------------------------------------
+
+
+def _check_handlers(config: Config | None) -> CheckResult:
+    name = "handlers"
+    if config is None:
+        return CheckResult(
+            name=name,
+            passed=None,
+            messages=("handlers not checked: the config didn't load",),
+        )
+
+    # First-seen route order, one entry per unique handler name, remembering
+    # which routes asked for it so a failure can name them.
+    wanted_by: dict[str, list[str]] = {}
+    for slug, route in config.routes.items():
+        wanted_by.setdefault(route.handler, []).append(slug)
+
+    problems: list[str] = []
+    for handler_name, slugs in wanted_by.items():
+        try:
+            resolve_handler(handler_name)
+        except HandlerResolutionError as e:
+            routes = ", ".join(f"routes.{slug}" for slug in slugs)
+            problems.append(f"{e} (wanted by {routes})")
+
+    if problems:
+        return CheckResult(name=name, passed=False, messages=tuple(problems))
+
+    count = len(wanted_by)
+    noun = "handler" if count == 1 else "handlers"
+    return CheckResult(name=name, passed=True, detail=f"{count} {noun} resolved")
+
+
+# -- secrets --------------------------------------------------------------
 
 
 def _check_secrets(path: Path | None) -> tuple[CheckResult, Secrets | None]:
@@ -139,6 +279,9 @@ def _check_secrets(path: Path | None) -> tuple[CheckResult, Secrets | None]:
                 warnings=(f"client secret expires {when}; make a new one soon",),
             ), secrets
     return CheckResult(name="secrets", passed=True), secrets
+
+
+# -- token cache ----------------------------------------------------------
 
 
 def _check_token_cache(
@@ -199,45 +342,138 @@ def _check_token_cache(
     ), result
 
 
-def _check_graph(
-    config: Config | None, secrets: Secrets | None, token_result: dict | None
-) -> CheckResult:
-    name = "graph"
-    if config is None:
-        return _graph_skip("the config didn't load")
-    if secrets is None:
-        return _graph_skip("no secrets to authenticate with")
-    if token_result is None:
-        return _graph_skip("the token cache didn't refresh")
-    access_token = token_result.get("access_token")
-    if not access_token:
-        return _graph_skip("the refreshed token had no access token")
+# -- graph, folders, categories -------------------------------------------
 
+
+def _run_graph_checks(
+    config: Config | None, secrets: Secrets | None, token_result: dict | None, fix: bool
+) -> tuple[CheckResult, CheckResult, CheckResult]:
+    # These three share one GraphClient session. graph resolves the base
+    # folder; folders and categories work from it, so they skip whenever graph
+    # didn't pass. A GraphError mid-session fails the check in progress and
+    # leaves the later ones as "not checked".
+    skip_reason = _graph_prerequisite(config, secrets, token_result)
+    if skip_reason is not None:
+        return (
+            _graph_skip(skip_reason),
+            _skip("folders", "the graph check didn't run"),
+            _skip("categories", "the graph check didn't run"),
+        )
+
+    assert config is not None and token_result is not None
     global_config = config.global_config
-    base_folder = global_config.base_folder
-    try:
-        with GraphClient(global_config.mailbox, get_token=lambda: access_token) as client:
-            folder = _resolve_base_folder(client, base_folder)
-            if folder is None:
-                return CheckResult(
-                    name=name,
-                    passed=False,
-                    messages=(
-                        f"no folder named {base_folder!r} under the mailbox root; "
-                        "create it, or point base_folder at one that exists",
-                    ),
-                )
-            messages = client.list_messages(folder["id"])
-    except GraphError as e:
-        return CheckResult(name=name, passed=False, messages=(_graph_advice(e),))
+    access_token = token_result["access_token"]
+    slugs = list(config.routes)
 
-    count = len(messages)
-    noun = "message" if count == 1 else "messages"
+    graph_result: CheckResult | None = None
+    folders_result: CheckResult | None = None
+    categories_result: CheckResult | None = None
+    try:
+        # GraphClient is looked up as a module global on purpose: the tests
+        # monkeypatch redcap_alert_handler.cli.doctor.GraphClient.
+        with GraphClient(global_config.mailbox, get_token=lambda: access_token) as client:
+            graph_result, base_id = _check_graph_folder(client, global_config, fix)
+            if graph_result.passed is not True or base_id is None:
+                folders_result = _skip("folders", "the graph check didn't pass")
+                categories_result = _skip("categories", "the graph check didn't pass")
+            else:
+                folders_result = _check_folders(client, base_id, slugs, fix)
+                categories_result = _check_categories(client, fix)
+    except GraphError as e:
+        advice = _graph_advice(e)
+        # Whichever result is still unset is the one that was mid-flight.
+        if graph_result is None:
+            graph_result = CheckResult(name="graph", passed=False, messages=(advice,))
+            folders_result = _skip("folders", "the graph check didn't pass")
+            categories_result = _skip("categories", "the graph check didn't pass")
+        elif folders_result is None:
+            folders_result = CheckResult(name="folders", passed=False, messages=(advice,))
+            categories_result = _skip("categories", "the folders check didn't finish")
+        else:
+            categories_result = CheckResult(name="categories", passed=False, messages=(advice,))
+
+    return graph_result, folders_result, categories_result
+
+
+def _graph_prerequisite(
+    config: Config | None, secrets: Secrets | None, token_result: dict | None
+) -> str | None:
+    if config is None:
+        return "the config didn't load"
+    if secrets is None:
+        return "no secrets to authenticate with"
+    if token_result is None:
+        return "the token cache didn't refresh"
+    if not token_result.get("access_token"):
+        return "the refreshed token had no access token"
+    return None
+
+
+def _check_graph_folder(
+    client: GraphClient, global_config: GlobalConfig, fix: bool
+) -> tuple[CheckResult, str | None]:
+    base_folder = global_config.base_folder
+    mailbox = global_config.mailbox
+    folder = _resolve_base_folder(client, base_folder)
+    if folder is None:
+        # "inbox" is well-known and always exists, so a missing base folder is
+        # always a named one we can create under the mailbox root.
+        if fix and base_folder != "inbox":
+            root = client.get_well_known_folder("msgFolderRoot")
+            folder = client.create_child_folder(root["id"], base_folder)
+            count = folder.get("totalItemCount", 0)
+            detail = (
+                f"created {base_folder}; {_message_phrase(count)} in {base_folder} for {mailbox}"
+            )
+            return CheckResult(name="graph", passed=True, detail=detail), folder["id"]
+        return CheckResult(
+            name="graph",
+            passed=False,
+            messages=(
+                f"no folder named {base_folder!r} under the mailbox root; "
+                "run rah init to create it, or point base_folder at one that exists",
+            ),
+        ), None
+
+    count = folder.get("totalItemCount", 0)
     return CheckResult(
-        name=name,
+        name="graph",
         passed=True,
-        detail=f"{count} {noun} in {base_folder} for {global_config.mailbox}",
-    )
+        detail=f"{_message_phrase(count)} in {base_folder} for {mailbox}",
+    ), folder["id"]
+
+
+def _check_folders(client: GraphClient, base_id: str, slugs: list[str], fix: bool) -> CheckResult:
+    report = resolve_layout(client, base_id, slugs, create=fix)
+    if report.created:
+        return CheckResult(
+            name="folders", passed=True, detail=f"created {', '.join(report.created)}"
+        )
+    if report.missing:
+        return CheckResult(
+            name="folders",
+            passed=False,
+            messages=(f"missing {', '.join(report.missing)}; run rah init to create them",),
+        )
+    return CheckResult(name="folders", passed=True)
+
+
+def _check_categories(client: GraphClient, fix: bool) -> CheckResult:
+    if fix:
+        created = seed_categories(client)
+        if created:
+            return CheckResult(
+                name="categories", passed=True, detail=f"created {', '.join(created)}"
+            )
+        return CheckResult(name="categories", passed=True)
+    missing = missing_categories(client)
+    if missing:
+        return CheckResult(
+            name="categories",
+            passed=False,
+            messages=(f"missing {', '.join(missing)}; run rah init to seed them",),
+        )
+    return CheckResult(name="categories", passed=True)
 
 
 def _resolve_base_folder(client: GraphClient, base_folder: str) -> dict | None:
@@ -253,10 +489,19 @@ def _graph_skip(reason: str) -> CheckResult:
     return CheckResult(name="graph", passed=None, messages=(f"graph not checked: {reason}",))
 
 
+def _skip(name: str, reason: str) -> CheckResult:
+    return CheckResult(name=name, passed=None, messages=(f"{name} not checked: {reason}",))
+
+
 def _graph_advice(error: GraphError) -> str:
     if error.status is None:
         return f"couldn't reach the Graph API: {error}"
     return f"Graph rejected the request (HTTP {error.status}): {error}"
+
+
+def _message_phrase(count: int) -> str:
+    noun = "message" if count == 1 else "messages"
+    return f"{count} {noun}"
 
 
 def _rough_timespan(result: dict) -> str:
@@ -271,18 +516,73 @@ def _rough_timespan(result: dict) -> str:
     return humanfriendly.format_timespan(seconds)
 
 
-def _report(result: CheckResult) -> None:
+# -- reporting ------------------------------------------------------------
+
+
+def _render_check(result: CheckResult) -> list[tuple[int, str]]:
+    """One check as (log level, line) pairs, shared by stderr and file output.
+
+    Both the live report and the -o text file run through here so their
+    wording can't drift apart.
+    """
+    lines: list[tuple[int, str]] = []
     if result.passed is True:
         if result.detail:
-            logger.info("✅ %s okay: %s", result.name, result.detail)
+            lines.append((logging.INFO, f"✅ {result.name} okay: {result.detail}"))
         else:
-            logger.info("✅ %s okay", result.name)
+            lines.append((logging.INFO, f"✅ {result.name} okay"))
         for warning in result.warnings:
-            logger.warning("⚠️ %s: %s", result.name, warning)
-        return
-    if result.passed is False:
+            lines.append((logging.WARNING, f"⚠️ {result.name}: {warning}"))
+    elif result.passed is False:
         for message in result.messages:
-            logger.error("❌ %s: %s", result.name, message)
+            lines.append((logging.ERROR, f"❌ {result.name}: {message}"))
+    else:
+        for message in result.messages:
+            lines.append((logging.INFO, message))
+    return lines
+
+
+def _report(result: CheckResult) -> None:
+    for level, text in _render_check(result):
+        logger.log(level, text)
+
+
+def _emit_report(results: tuple[CheckResult, ...], json_output: bool, output: Path | None) -> None:
+    # Human stderr logging already happened; this is the extra machine or file
+    # copy. --json to stdout (or the file); -o without --json writes the plain
+    # check lines to the file.
+    if json_output:
+        payload = json.dumps(_json_report(results))
+        if output is None:
+            typer.echo(payload)
+            return
+        _write_file(output, payload)
         return
-    for message in result.messages:
-        logger.info(message)
+    if output is not None:
+        text = "\n".join(text for result in results for _, text in _render_check(result))
+        _write_file(output, text)
+
+
+def _json_report(results: tuple[CheckResult, ...]) -> dict:
+    status = {True: "passed", False: "failed", None: "skipped"}
+    return {
+        "ok": not any(result.passed is False for result in results),
+        "checks": [
+            {
+                "name": result.name,
+                "status": status[result.passed],
+                "detail": result.detail,
+                "messages": list(result.messages),
+                "warnings": list(result.warnings),
+            }
+            for result in results
+        ],
+    }
+
+
+def _write_file(output: Path, text: str) -> None:
+    try:
+        output.write_text(text + "\n")
+    except OSError as e:
+        logger.error("💥 couldn't write the report to %s: %s", output, e.strerror)
+        raise typer.Exit(1) from e

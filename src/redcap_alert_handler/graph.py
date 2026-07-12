@@ -167,14 +167,14 @@ class GraphClient:
 
     def list_categories(self) -> list[dict]:
         """The mailbox's master category list."""
-        data = self._request("GET", f"{self._base}/outlookCategories")
+        data = self._request("GET", f"{self._base}/outlook/masterCategories")
         return data.get("value", [])
 
     def create_category(self, name: str, color: str) -> dict:
         """Add one category to the master list (color is a Graph preset name)."""
         return self._request(
             "POST",
-            f"{self._base}/outlookCategories",
+            f"{self._base}/outlook/masterCategories",
             json_body={"displayName": name, "color": color},
         )
 

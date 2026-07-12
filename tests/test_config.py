@@ -31,7 +31,7 @@ def test_load_good_minimal_config():
     assert set(config.routes) == {"simple"}
     route = config.routes["simple"]
     assert route.slug == "simple"
-    assert route.handler == "rah.handlers:log_message"
+    assert route.handler == "redcap-alert-handler:log_message"
     assert route.max_age == timedelta(days=1)
     assert route.extra == {}
 
@@ -44,13 +44,13 @@ def test_load_good_full_config():
     assert set(config.routes) == {"consent", "push_alert"}
 
     consent = config.routes["consent"]
-    assert consent.handler == "study_acme.handlers:consent"
+    assert consent.handler == "redcap-alert-handler:log_message"
     # per-route override wins over the global default
     assert consent.max_age == timedelta(hours=3)
     assert consent.extra == {"template": "consent_v2"}
 
     push_alert = config.routes["push_alert"]
-    assert push_alert.handler == "study_acme.handlers:push"
+    assert push_alert.handler == "redcap-alert-handler:log_message"
     # no override: falls back to global max_age
     assert push_alert.max_age == timedelta(days=1)
     assert push_alert.extra == {"model": "group-assign-v3"}
@@ -75,6 +75,7 @@ BAD_CONFIGS = [
     ("bad_slug.toml", ["routes.bad-slug"]),
     ("bad_missing_handler.toml", ["routes.myslug"]),
     ("bad_empty_handler.toml", ["routes.myslug"]),
+    ("bad_unqualified_handler.toml", ["routes.simple"]),
     ("bad_unknown_top_level_section.toml", ["gobal"]),
     ("bad_no_routes.toml", ["routes"]),
     ("bad_scalar_route.toml", ["routes.myslug"]),
@@ -99,6 +100,16 @@ def test_bad_config_reports_problems(filename, expected_substrings):
         assert any(substring in problem for problem in problems), (
             f"expected a problem mentioning {substring!r}, got {problems!r}"
         )
+
+
+def test_bad_unqualified_handler_reports_the_qualified_form():
+    # A bare entry-point name is no longer enough; the message has to show
+    # an operator what a fixed handler line looks like.
+    with pytest.raises(ConfigError) as exc_info:
+        load_config(CONFIGS / "bad_unqualified_handler.toml")
+
+    problems = exc_info.value.problems
+    assert any("package-name:handler_name" in problem for problem in problems)
 
 
 def test_bad_multiple_problems_reports_all_at_once():

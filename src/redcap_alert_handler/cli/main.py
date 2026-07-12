@@ -21,13 +21,14 @@ from redcap_alert_handler.cli.conventions import (
     get_logger,
     setup_logging,
 )
-from redcap_alert_handler.cli.doctor import doctor
+from redcap_alert_handler.cli.doctor import doctor, init
 
 app = typer.Typer(name="rah")
 logger = get_logger(__name__)
 
 app.command(name="auth")(auth)
 app.command(name="doctor")(doctor)
+app.command(name="init")(init)
 
 
 def _print_version(value: bool) -> None:

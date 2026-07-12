@@ -9,4 +9,4 @@ retry_backoff = "5m"
 max_age = "1d"
 
 [routes.simple]
-handler = "redcap-alert-handler:log_message"
+handler = "study-acme-handlers:consent"

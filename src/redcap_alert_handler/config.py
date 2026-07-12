@@ -291,10 +291,15 @@ def _parse_route(
 
     handler = entry_raw.get("handler")
     if handler is None:
-        problems.append(f'routes.{slug}: missing handler; set handler = "entry-point-name"')
-    elif not isinstance(handler, str) or not handler.strip():
         problems.append(
-            f"routes.{slug}: handler must be a non-empty string naming a registered handler"
+            f'routes.{slug}: missing handler; set handler = "package-name:handler_name"'
+        )
+    elif not isinstance(handler, str):
+        problems.append(f"routes.{slug}: handler must be a string")
+    elif not _is_qualified_handler_ref(handler):
+        problems.append(
+            f'routes.{slug}: handler must look like "package-name:handler_name" '
+            "(the installed package and its registered handler)"
         )
 
     max_age = fallback_max_age
@@ -317,6 +322,13 @@ def _parse_route(
         RouteConfig(slug=slug, handler=handler, max_age=max_age, extra=MappingProxyType(extra)),
         [],
     )
+
+
+def _is_qualified_handler_ref(value: str) -> bool:
+    # Shape only -- exactly one colon, both halves non-empty once stripped.
+    # Resolving the halves against installed packages is the loader's job.
+    package, colon, name = value.partition(":")
+    return bool(colon) and value.count(":") == 1 and bool(package.strip()) and bool(name.strip())
 
 
 def _parse_mailbox(raw: dict[str, object], problems: list[str]) -> str | None:

@@ -162,7 +162,7 @@ class FakeGraph:
         params = request.url.params
 
         match segments:
-            case ["outlookCategories"]:
+            case ["outlook", "masterCategories"]:
                 if method == "GET":
                     return _json(200, {"value": self.categories})
                 if method == "POST":
@@ -245,7 +245,7 @@ class FakeGraph:
         folder = self.folders.get(self._resolve_folder(folder_ref))
         if folder is None:
             return _error(404, "ErrorItemNotFound", f"no folder {folder_ref}")
-        return _json(200, folder)
+        return _json(200, self._project_folder(folder))
 
     def _list_child_folders(self, folder_ref: str, params: httpx.QueryParams) -> httpx.Response:
         parent_id = self._resolve_folder(folder_ref)
@@ -253,18 +253,29 @@ class FakeGraph:
         wanted = _parse_display_name(params.get("$filter"))
         if wanted is not None:
             children = [f for f in children if f["displayName"] == wanted]
-        return _json(200, {"value": children})
+        return _json(200, {"value": [self._project_folder(f) for f in children]})
 
     def _create_child_folder(self, folder_ref: str, request: httpx.Request) -> httpx.Response:
         parent_id = self._resolve_folder(folder_ref)
         display_name = json.loads(request.content)["displayName"]
-        return _json(201, self.add_folder(display_name, parent_id=parent_id))
+        created = self.add_folder(display_name, parent_id=parent_id)
+        return _json(201, self._project_folder(created))
 
     def _create_category(self, request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
         return _json(201, self.add_category(body["displayName"], body.get("color", "preset0")))
 
     # -- helpers ----------------------------------------------------------
+
+    def _project_folder(self, folder: dict) -> dict:
+        """A folder as Graph would return it, with totalItemCount computed live.
+
+        Real Graph tracks the count on the folder resource itself; the fake
+        keeps only messages and folders as state, so it counts at serve time
+        rather than maintaining a second, driftable number.
+        """
+        count = sum(1 for m in self.messages.values() if m["parentFolderId"] == folder["id"])
+        return {**folder, "totalItemCount": count}
 
     def _resolve_folder(self, folder_ref: str) -> str:
         # A request may name a folder by its well-known alias (inbox,

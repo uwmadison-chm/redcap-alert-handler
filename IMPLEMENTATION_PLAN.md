@@ -146,9 +146,9 @@ The public, versioned, cross-repo API -- reviewed as such.
 * `HandlerError` / `TransientError` / `PermanentError` hierarchy.
 * `Message` frozen dataclass (`internet_message_id`, subject, text/HTML body, sender, received time) -- picklable, no Graph types.
 * `Context` (slug, full route config entry, per-route state dir; exact extra fields resolve the brief's open question here).
-* Entry-point loader: resolve *all* configured handlers at startup, fail fast with a message naming the missing entry point and the route that wanted it.
-* A built-in example handler shipped by `rah` itself under `rah.handlers` (e.g. one that just logs the message) -- proves the discovery machinery and powers end-to-end tests without a private handler package.
-* A "Handler API" doc section with the semver promise from the brief.
+* Entry-point loader: resolve *all* configured handlers at startup, fail fast with a message naming the missing entry point and the route that wanted it. The config's handler reference is package-qualified (`package:name`, matching the installed distribution and its registered entry-point name) -- settled 2026-07-11 during step 4.
+* A built-in example handler shipped by `rah` itself under `rah.handlers` (e.g. one that just logs the message) -- proves the discovery machinery and powers end-to-end tests without a private handler package. (The `handlers.py` module and its `log_message` entry point were stubbed in step 4 so doctor's handler check has something to resolve; this step upgrades the body to the real contract.)
+* A "Handler API" doc section with the semver promise from the brief, plus the handler-author rules: depend on `rah` with a wide version range (never a pin -- only the deployment project pins), and state the package's distribution name and handler names in its README, since `package:name` is the string operators copy into a route.
 
 **Done when:** the example handler is discovered through real `importlib.metadata` entry points in tests, not by monkeypatching.
 
