@@ -6,7 +6,9 @@
 
 This package is the public, versioned API handler packages build against,
 and these re-exports are exactly the names a handler author needs: `Message`
-and `Context` to receive, the `HandlerError` hierarchy to raise. They're
+and `Context` to receive, the `HandlerError` hierarchy to raise, and
+`get_logger` to log with (a plain `logging.getLogger(__name__)` would land
+outside rah's logger hierarchy, where nothing is listening). They're
 re-exported once more at the package root, so
 `from redcap_alert_handler import PermanentError` works.
 
@@ -21,6 +23,7 @@ from redcap_alert_handler.handlers.errors import (
     PermanentError,
     TransientError,
 )
+from redcap_alert_handler.logs import get_logger
 
 __all__ = [
     "Context",
@@ -28,4 +31,5 @@ __all__ = [
     "Message",
     "PermanentError",
     "TransientError",
+    "get_logger",
 ]

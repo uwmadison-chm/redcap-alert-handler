@@ -2,20 +2,29 @@
 # Copyright (c) Board of Regents of the University of Wisconsin System
 # Distributed under the MIT license; see LICENSE in the project root.
 
-"""Logging, color, and stream conventions shared by every CLI endpoint."""
+"""Option and flag conventions shared by every CLI endpoint.
+
+The logging system itself lives in `logs`, one level up, since handler
+packages and engine modules use it too. What's here is the CLI's own layer:
+the typer options every endpoint repeats, and the glue that turns -v, -q,
+and --no-color into a `configure_logging` call.
+"""
 
 from __future__ import annotations
 
 import logging
-import os
 import sys
 from pathlib import Path
-from typing import Annotated, TextIO
+from typing import Annotated
 
 import typer
-from rich.console import Console
 
-LOGGER_NAME = "redcap_alert_handler"
+from redcap_alert_handler.logs import (
+    LOGGER_NAME,
+    configure_logging,
+    get_logger,
+    resolve_use_color,
+)
 
 # Shared by every endpoint that needs config or secrets (doctor now; auth and
 # watch later) so the flags, envvars, and help text can't drift apart.
@@ -69,18 +78,6 @@ NoColorOption = Annotated[
     typer.Option("--no-color", help="Turn off color in logging."),
 ]
 
-_LEVEL_STYLES = {
-    logging.DEBUG: "dim",
-    logging.WARNING: "yellow",
-    logging.ERROR: "bold red",
-    logging.CRITICAL: "bold red",
-}
-
-
-def get_logger(name: str) -> logging.Logger:
-    """Return a logger under the redcap_alert_handler hierarchy."""
-    return logging.getLogger(name)
-
 
 def resolve_log_level(verbose: bool, quiet: bool) -> tuple[int, str | None]:
     """Turn -v/-q into a log level, plus a warning to emit if both were given."""
@@ -93,36 +90,6 @@ def resolve_log_level(verbose: bool, quiet: bool) -> tuple[int, str | None]:
     return logging.INFO, None
 
 
-def resolve_use_color(no_color_flag: bool, stream: TextIO) -> bool:
-    """Decide whether to color output for stream, honoring the no-color.org env vars."""
-    if no_color_flag:
-        return False
-    # no-color.org: the variable disables color if set to any non-empty value.
-    if os.environ.get("NO_COLOR"):
-        return False
-    if os.environ.get("RAH_NO_COLOR"):
-        return False
-    return stream.isatty()
-
-
-class _LineHandler(logging.Handler):
-    """Writes one styled line per record through a rich Console."""
-
-    def __init__(self, console: Console) -> None:
-        super().__init__()
-        self._console = console
-
-    def emit(self, record: logging.LogRecord) -> None:
-        # Everything under try, like stdlib StreamHandler: a handler can
-        # outlive its stream, and logging must never take the program down.
-        try:
-            message = self.format(record)
-            style = _LEVEL_STYLES.get(record.levelno)
-            self._console.print(message, style=style, highlight=False, soft_wrap=True, markup=False)
-        except Exception:
-            self.handleError(record)
-
-
 def setup_logging(verbose: bool, quiet: bool, no_color: bool) -> None:
     """Resolve the logging flags and install the handler, warning on -v -q."""
     level, warning = resolve_log_level(verbose, quiet)
@@ -130,18 +97,3 @@ def setup_logging(verbose: bool, quiet: bool, no_color: bool) -> None:
     configure_logging(level, use_color)
     if warning:
         get_logger(LOGGER_NAME).warning(warning)
-
-
-def configure_logging(level: int, use_color: bool, stream: TextIO | None = None) -> None:
-    """Install rah's log handler on the package logger. Safe to call more than once."""
-    if stream is None:
-        stream = sys.stderr
-    logger = get_logger(LOGGER_NAME)
-    logger.handlers.clear()
-    logger.propagate = False
-    logger.setLevel(level)
-
-    console = Console(file=stream, no_color=not use_color)
-    handler = _LineHandler(console)
-    handler.setFormatter(logging.Formatter("%(message)s"))
-    logger.addHandler(handler)

@@ -10,6 +10,7 @@ from redcap_alert_handler.handlers import (
     Message,
     PermanentError,
     TransientError,
+    get_logger,
 )
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     "Message",
     "PermanentError",
     "TransientError",
+    "get_logger",
 ]

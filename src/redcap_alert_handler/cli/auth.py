@@ -32,10 +32,10 @@ from redcap_alert_handler.cli.conventions import (
     QuietOption,
     RequiredSecretsOption,
     VerboseOption,
-    get_logger,
     setup_logging,
 )
 from redcap_alert_handler.config import Config, ConfigError, Secrets, load_config, load_secrets
+from redcap_alert_handler.logs import get_logger
 
 logger = get_logger(__name__)
 

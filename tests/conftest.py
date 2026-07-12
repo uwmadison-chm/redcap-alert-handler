@@ -29,7 +29,7 @@ def reset_package_logger():
     yield
     import logging
 
-    from redcap_alert_handler.cli.conventions import LOGGER_NAME
+    from redcap_alert_handler.logs import LOGGER_NAME
 
     logger = logging.getLogger(LOGGER_NAME)
     logger.handlers.clear()

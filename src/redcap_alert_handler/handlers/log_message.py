@@ -12,8 +12,8 @@ against a re-run.
 
 from __future__ import annotations
 
-from redcap_alert_handler.cli.conventions import get_logger
 from redcap_alert_handler.handlers.contract import Context, Message
+from redcap_alert_handler.logs import get_logger
 
 logger = get_logger(__name__)
 

@@ -18,10 +18,10 @@ from redcap_alert_handler.cli.conventions import (
     NoColorOption,
     QuietOption,
     VerboseOption,
-    get_logger,
     setup_logging,
 )
 from redcap_alert_handler.cli.doctor import doctor, init
+from redcap_alert_handler.logs import get_logger
 
 app = typer.Typer(name="rah")
 logger = get_logger(__name__)

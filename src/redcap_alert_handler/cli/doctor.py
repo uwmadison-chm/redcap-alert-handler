@@ -31,7 +31,6 @@ from redcap_alert_handler.cli.conventions import (
     QuietOption,
     SecretsOption,
     VerboseOption,
-    get_logger,
     setup_logging,
 )
 from redcap_alert_handler.config import (
@@ -44,6 +43,7 @@ from redcap_alert_handler.config import (
 )
 from redcap_alert_handler.graph import GraphClient, GraphError
 from redcap_alert_handler.handlers.loader import HandlerResolutionError, load_handlers
+from redcap_alert_handler.logs import get_logger
 from redcap_alert_handler.mailbox import missing_categories, resolve_layout, seed_categories
 
 logger = get_logger(__name__)
