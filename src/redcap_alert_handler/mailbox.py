@@ -6,7 +6,7 @@
 
 One place says what folders and categories a mailbox needs: doctor checks the
 live mailbox against it, `rah init` (doctor --fix) creates what's missing, and
-step 7's watch loop resolves folder ids through the same layout. The folder
+step 7's `rah process` resolves folder ids through the same layout. The folder
 tree hangs off the config's base folder -- a dead-letters folder, plus a
 completed/error pair under each route slug.
 """

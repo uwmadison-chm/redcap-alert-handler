@@ -26,7 +26,7 @@ When configured correctly this handles data in a HIPAA-compliant way. In our env
 
 ## Design Overview
 
-The main process is `rah watch`: a single long-running foreground process that polls the mailbox's inbox (or a configured base folder standing in for it -- handy for testing against a folder in a personal account) over the Microsoft Graph REST API and dispatches messages to handlers. It does not daemonize — it runs in the foreground, logs to stdout/stderr, and leaves process management to systemd (or to the operator's terminal in the dev loop). There is no webhook, no public endpoint, and no Graph change-notification subscription (see "Why Polling, Not Webhooks" below).
+The main process is `rah process`: it makes one pass over the mailbox's inbox (or a configured base folder standing in for it -- handy for testing against a folder in a personal account) via the Microsoft Graph REST API, dispatches what it finds to handlers, and exits once in-flight handlers finish. A completed pass exits 0 even when handlers failed -- the mailbox records those outcomes; nonzero means infrastructure trouble (bad config, auth, Graph unreachable). That makes a bare `rah process` cron-able. With `--watch` it repeats the pass forever as a single long-running foreground process. It does not daemonize — it runs in the foreground, logs to stdout/stderr, and leaves process management to systemd (or to the operator's terminal in the dev loop). There is no webhook, no public endpoint, and no Graph change-notification subscription (see "Why Polling, Not Webhooks" below).
 
 The poll is stateless. Because processed messages are always moved *out* of the inbox, the inbox itself is the work queue: each cycle lists the inbox and acts on what it finds. There is no delta token or cursor to persist, corrupt, or lose, and in steady state the folder is near-empty, so a poll is one cheap request.
 
@@ -36,7 +36,7 @@ Each poll cycle does three jobs:
 2. re-dispatch messages whose retry-time has passed — the poll loop *is* the retry scheduler and the crash-recovery sweep;
 3. refresh the OAuth token if it's due (see Auth).
 
-The poll interval is set in the config file and overridable on the `rah watch` command line; 5 seconds is a reasonable default. Throttle headroom is enormous — Graph's Exchange limit is 10,000 requests per 10 minutes per mailbox per app, and a 5-second poll uses about 120 — so if some use case ever needs faster reaction, the fix is a smaller interval, not a redesign.
+The poll interval is set in the config file and overridable on the `rah process --watch` command line; 5 seconds is a reasonable default. Throttle headroom is enormous — Graph's Exchange limit is 10,000 requests per 10 minutes per mailbox per app, and a 5-second poll uses about 120 — so if some use case ever needs faster reaction, the fix is a smaller interval, not a redesign.
 
 The process reads a TOML config describing a collection of **routes**. Each route entry has at least:
 * a unique **slug** (the key);
@@ -48,7 +48,7 @@ A route entry may also carry **handler-specific keys** (data storage paths, mode
 
 A *study* is deliberately not an engine concept: one study will often own several routes (a consent alert, an intervention ASI, a push-notification alert), each parsed and handled differently. "Study" remains the plain organizational word for whatever owns a set of routes.
 
-For each incoming message, the subject must begin with a route slug, optionally followed by `|`; if more than one slug matches, the longest wins. If no slug matches, the message moves to `dead-letters`. If the message is older than its route's maximum age, it moves to `dead-letters` with the `rah:expired` category — expired mail is never dispatched. Otherwise the message is dispatched to the handler the route's config references (possibly shared with other routes).
+For each incoming message, the subject up to the first `|` (or the whole subject when there is no `|`), whitespace-trimmed, must exactly match a route slug -- so at most one route can ever claim a message, and a subject like `consent followup` with no `|` matches nothing. If no slug matches, the message moves to `dead-letters`. If the message is older than its route's maximum age, it moves to `dead-letters` with the `rah:expired` category — expired mail is never dispatched. Otherwise the message is dispatched to the handler the route's config references (possibly shared with other routes).
 
 Based on the outcome, the message moves to `{slug}/completed`, is left for retry, or moves to a failure folder. The split between failure folders: mail that matched a route but failed permanently goes to that route's `{slug}/error`; the global `dead-letters` is reserved for mail `rah` could not or would not route — unmatched slug, expired, or retries exhausted. The handler also performs the side effects we actually want.
 
@@ -67,6 +67,8 @@ Not `msgraph-sdk-python`. The Graph surface `rah` needs is tiny — list message
 ## One Watcher Only
 
 Exactly one watcher claims and moves messages. Graph cannot atomically *claim* a message for one of several competing readers, so we do not try. For throughput, fan out **inside** the process (one reader, a worker pool); the claim/move logic stays in one place. Treat single-writer as an invariant, not a configuration knob.
+
+One-shot mode makes this easier to violate by accident: a cron-launched `rah process` overlapping a running `--watch` service, or an overlapping cron run, is two writers against the same mailbox. Pick cron or the service for a given mailbox, never both.
 
 ## State Model: Four Layers
 
@@ -131,7 +133,7 @@ dependencies = [
 ]
 ```
 
-`uv sync` builds one shared environment containing `rah`, the handler packages, and all transitive deps; `rah watch` runs inside it and discovers handlers via the entry points the handler packages declared.
+`uv sync` builds one shared environment containing `rah`, the handler packages, and all transitive deps; `rah process` runs inside it and discovers handlers via the entry points the handler packages declared.
 
 How the pieces resolve:
 
@@ -163,8 +165,8 @@ There is **no** processing-order guarantee (arrival order is not processing orde
 **Delegated OAuth only** (standard authorization-code flow against the service-account mailbox). Application-level permissions would avoid refresh-token fragility, but require tenant-admin steps we can't get; we accept the trade.
 
 * `rah auth` runs the interactive flow once and writes the msal token cache. We're a confidential client (the tenant doesn't allow public client registrations), so the flow is: print the authorization URL, sign in from any browser, paste the redirect URL back into the prompt. No localhost listener; works over SSH.
-* `rah watch` refreshes the token proactively about once an hour inside the poll loop (and on demand after a 401), keeping the refresh token warm instead of letting it age toward an inactivity cutoff.
-* The accepted failure mode: a conditional-access or MFA policy change can invalidate the refresh token at any time, and there is nothing we can do about it. When that happens `rah watch` keeps running, logs loudly, and keeps re-reading the token cache each cycle — so recovery is a human re-running `rah auth`, no service restart needed. `rah doctor` reports token health.
+* `rah process --watch` refreshes the token proactively about once an hour inside the poll loop (and on demand after a 401), keeping the refresh token warm instead of letting it age toward an inactivity cutoff. A single pass just refreshes if due at startup.
+* The accepted failure mode: a conditional-access or MFA policy change can invalidate the refresh token at any time, and there is nothing we can do about it. When that happens `rah process --watch` keeps running, logs loudly, and keeps re-reading the token cache each cycle — so recovery is a human re-running `rah auth`, no service restart needed. `rah doctor` reports token health.
 
 ## Configuration, Secrets, and Tokens
 
@@ -176,11 +178,11 @@ Secrets do **not** go in environment variables. Env vars are too easy to extract
 
 ## Deployment
 
-Run `rah watch` as a systemd service under a dedicated unprivileged user. The process stays in the foreground and logs to stdout/stderr; systemd owns process management, restarts, and the journal — `rah` never forks, writes pidfiles, or manages its own logs. The good-practice sketch:
+Run `rah process --watch` as a systemd service under a dedicated unprivileged user. The process stays in the foreground and logs to stdout/stderr; systemd owns process management, restarts, and the journal — `rah` never forks, writes pidfiles, or manages its own logs. The good-practice sketch:
 
 ```ini
 [Service]
-ExecStart=/opt/our-rah/.venv/bin/rah watch
+ExecStart=/opt/our-rah/.venv/bin/rah process --watch
 User=rah
 Group=rah-grp
 StateDirectory=rah
@@ -197,9 +199,9 @@ Environment=RAH_SECRETS=%d/secrets.toml
 
 Multi-command, git-like, built with **typer** (`@typer.group()` + subcommands):
 
-* `rah watch` — the main long-running process: the poll/dispatch loop described in the Design Overview. Runs in the foreground (systemd handles process management). `--poll-interval` overrides the config value.
+* `rah process` — the main event: one pass of the decide/claim/dispatch cycle described in the Design Overview, exiting once in-flight handlers finish. `--watch` repeats the pass forever in the foreground (systemd handles process management); `--poll-interval` overrides the config value in watch mode.
 * `rah auth` — runs the delegated OAuth flow; stores the token cache at the location given in the main config.
-* `rah reprocess` — replays failed mail **on demand**, covering both `dead-letters` and the `{slug}/error` folders. It does not process anything itself: it resets the message's machine state (retries-left, retry-time) and moves it back to the inbox, where the watcher claims it like any new message — replay never grows a second claim/move code path, so the single-writer invariant holds. Not automatic: the usual cause is a missing/wrong config, and a human should fix config before replaying.
+* Replaying failed mail — probably `--dead-letters` / `--errors` flags on `rah process` rather than a separate `rah reprocess` command (direction settled 2026-07-12; the spelling gets settled at implementation). Replay covers both `dead-letters` and the `{slug}/error` folders, **on demand**. It does not dispatch anything in place: it resets the message's machine state (retries-left, retry-time) and moves it back to the base folder, where the normal pass claims it like any new message — replay never grows a second claim/move code path, so the single-writer invariant holds. Not automatic: the usual cause is a missing/wrong config, and a human should fix config before replaying.
 * `rah doctor` — local diagnostics, standing in for a /health endpoint: parses the config, lists loaded routes and their resolved handler entry points, checks the secrets file and token cache, and makes a live Graph call to verify mailbox access and folder layout. Human-readable output, nonzero exit status on failure so it can back a cron or monitoring check. `--fix` idempotently provisions anything missing in the mailbox (route folders, the `rah:*` master category list).
 * `rah init` — alias for `rah doctor --fix`; the documented first-run step after `rah auth`.
 
@@ -212,4 +214,4 @@ A timeout **abandons** a handler; it does not kill it — Python cannot kill a t
 ## Open Questions
 
 * ~~Exact shape of the handler context object~~ Settled 2026-07-12: `Context` is the slug, one merged config mapping (`[global]` extras under the route's full entry, route keys winning; engine keys like `mailbox` excluded), and a per-route state directory (`state_base_dir/slug`). Keys in the mapping are opaque to the engine — a handler documents what it reads and ignores the rest.
-* `rah reprocess` selection semantics (everything? filter by route / age / folder?) and how replay interacts with max-age (a replayed message older than its route's max age would immediately re-expire).
+* Replay flag spelling and selection semantics on `rah process` (everything? filter by route / age / folder?) and how replay interacts with max-age (a replayed message older than its route's max age would immediately re-expire).

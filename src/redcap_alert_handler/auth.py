@@ -12,7 +12,7 @@ URI is never served -- the browser's failed navigation still carries the
 auth code in its address bar.
 
 Everything here is shared: `rah auth` seeds the cache, `rah doctor` reports
-on it, and `rah watch` will refresh from it.
+on it, and `rah process` will refresh from it.
 """
 
 from __future__ import annotations
@@ -135,7 +135,7 @@ def refresh_silently(app: msal.ConfidentialClientApplication) -> dict | None:
     """Try to get a token from the cache without bothering anyone.
 
     Returns the msal token result, or None when there's no cached account or
-    the refresh didn't produce one. This is the path `watch` leans on: a
+    the refresh didn't produce one. This is the path `rah process` leans on: a
     None here means it's time for a human to run `rah auth` again.
     """
     for account in app.get_accounts():

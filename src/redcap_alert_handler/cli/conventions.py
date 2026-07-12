@@ -27,7 +27,7 @@ from redcap_alert_handler.logs import (
 )
 
 # Shared by every endpoint that needs config or secrets (doctor now; auth and
-# watch later) so the flags, envvars, and help text can't drift apart.
+# process later) so the flags, envvars, and help text can't drift apart.
 ConfigOption = Annotated[
     Path,
     typer.Option(

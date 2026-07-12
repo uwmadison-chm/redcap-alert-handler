@@ -154,33 +154,38 @@ The public, versioned, cross-repo API -- reviewed as such.
 
 ## 6. Dispatch core (pure logic, no I/O)
 
-* Slug matcher: longest-match against configured slugs, optional `|` delimiter.
+* Slug matcher: take the subject up to the first `|` (or the whole subject when there is no `|`), trim surrounding whitespace, and look it up in the configured slugs. Exact match, so at most one route can ever claim a message. Note this is stricter than "begins with a slug": a subject like `consent followup` with no `|` matches nothing. Alert subjects must be `slug` or `slug|whatever`.
+* The dispatch core handles one message at a time; finding messages to process is the processor's job (step 7).
 * Decision function: (message state, route config, now) > action -- dispatch, wait-for-retry, expire, dead-letter, route-error. Pure and exhaustively table-tested; this is where the brief's state model becomes code.
 * Transition writer contracts: authoritative property first, then advisory category; retries-left decremented **before** dispatch.
 * Retry policy: initial retries-left and backoff > retry-time computation.
 
 **Done when:** the new/retrying/expired/unroutable/exhausted matrix is covered by table-driven tests with no mocks needed.
 
-## 7. `rah watch`
+## 7. `rah process`
 
-The main event; everything above composes here.
+The main event; everything above composes here. (Renamed from `rah watch`, settled 2026-07-12: the default is a single pass, `--watch` adds the polling loop.)
 
-* Foreground poll loop (interval from config, `--poll-interval` override): list inbox > decide > claim (decrement + `rah:processing`) > dispatch on a worker thread pool > apply outcome (property, category, move).
-* Timeout = abandon, per the brief; abandoned-thread accounting in logs.
-* Hourly proactive token refresh inside the loop; on auth failure, keep polling, log loudly, re-read the cache each cycle.
+* One pass over the base folder: list > decide > claim (decrement + `rah:processing`) > dispatch on the worker thread pool > apply outcome (property, category, move) > exit once in-flight handlers finish. Messages whose retry-time hasn't arrived are left alone and don't delay exit; they're the next run's problem.
+* Exit status for a single pass: 0 if the pass completed, even when handlers failed -- the mailbox records those outcomes. Nonzero means infrastructure trouble: bad config, auth, Graph unreachable. This is what makes bare `rah process` cron-able.
+* `--watch` repeats the pass forever (interval from config, `--poll-interval` override). Same loop body; the flag only adds the sleep.
+* Single-writer still holds across modes: a cron-launched `rah process` overlapping a `--watch` service is two writers. Run one or the other against a mailbox, never both.
+* Timeout = abandon, per the brief; abandoned-thread accounting in logs. (Also why one-shot mode still uses the pool -- you can't abandon the main thread.)
+* Hourly proactive token refresh inside the loop; on auth failure, keep polling, log loudly, re-read the cache each cycle. A single pass just refreshes if due at startup.
 * Clean shutdown on SIGTERM/SIGINT: stop claiming, let in-flight handlers finish (bounded), exit 0.
 * One log line per message state transition -- the mailbox-legibility story's stderr counterpart.
 * Integration tests on the fake Graph: happy path, transient>retry>success, permanent>error folder, poison>dead-letters, and crash-recovery (side effect done but move not -- reprocess must no-op via the handler's claim).
 
-**Done when:** against the real mailbox, a REDCap-style message sent by hand flows to `{slug}/completed` via the built-in handler, and the poison/retry tests pass on the fake.
+**Done when:** against the real mailbox, a REDCap-style message sent by hand flows to `{slug}/completed` via the built-in handler through `rah process`, and the poison/retry tests pass on the fake.
 
-## 8. `rah reprocess`
+## 8. Replaying failed mail
 
-* Explicit selection required (no bare "replay everything by accident"): `--route SLUG` and/or `--folder dead-letters|error`, with `--all` as the deliberate big hammer. Settle the brief's open question here, including how replay interacts with max-age.
-* Resets machine state (retries-left, retry-time), moves back to inbox; the watcher does the rest. No processing logic in this command.
+Probably `--dead-letters` / `--errors` flags on `rah process` rather than a separate `rah reprocess` command, now that one-shot `rah process` exists (direction settled 2026-07-12; the details belong to this step). Whatever the spelling, the semantics stay the brief's: reset machine state (retries-left, retry-time) and move the message back to the base folder for the normal pass to claim -- no second dispatch path. Settle how replay interacts with max-age here (a replayed message older than its route's max age immediately re-expires).
+
+* Explicit selection required (no bare "replay everything by accident"), with something like `--all` as the deliberate big hammer.
 * `--dry-run` prints what would move.
 
-**Done when:** a dead-lettered message replays end-to-end through a running `watch`.
+**Done when:** a dead-lettered message replays end-to-end through `rah process`.
 
 ## 9. Deployment and docs
 
