@@ -17,18 +17,24 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 
+from redcap_alert_handler.dispatch import (
+    CATEGORY_DEAD,
+    CATEGORY_ERRORED,
+    CATEGORY_EXPIRED,
+    CATEGORY_PROCESSING,
+)
 from redcap_alert_handler.graph import GraphClient
 
-# The brief's four categories, each with a Graph preset color. These ride
-# along on messages as advisory state, so the colors are chosen to read at a
-# glance in Outlook: processing blue, errored red, expired yellow, dead
-# cranberry.
+# The brief's four categories, each with a Graph preset color. The names live
+# in dispatch, which owns the state model these categories mirror; the colors
+# are chosen to read at a glance in Outlook: processing blue, errored red,
+# expired yellow, dead cranberry.
 RAH_CATEGORIES: Mapping[str, str] = MappingProxyType(
     {
-        "rah:processing": "preset7",
-        "rah:errored": "preset0",
-        "rah:expired": "preset3",
-        "rah:dead": "preset9",
+        CATEGORY_PROCESSING: "preset7",
+        CATEGORY_ERRORED: "preset0",
+        CATEGORY_EXPIRED: "preset3",
+        CATEGORY_DEAD: "preset9",
     }
 )
 

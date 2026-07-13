@@ -73,7 +73,7 @@ One-shot mode makes this easier to violate by accident: a cron-launched `rah pro
 ## State Model: Four Layers
 
 1. **`internet_message_id`** (the RFC `Message-ID`) — the durable message processing key. It is stable across moves and folders, unlike the Graph `id`, which changes when a message moves between folders. Handlers use this to prevent acting on a message more than once.
-2. **Single-value extended properties** — the message's authoritative machine state: retries-left, retry-time, processed marker. Typed, survive moves, read via `$expand`.
+2. **Single-value extended properties** — the message's authoritative machine state: retries-left, retry-time, and a terminal-state marker (completed/errored/expired/dead; settled 2026-07-13, growing the original processed marker to cover every terminal outcome, so an interrupted terminal move can be finished without re-dispatch). Typed, survive moves, read via `$expand`.
 3. **Categories** — an advisory, derived, human-visible projection only (e.g. `rah:processing`, `rah:errored`, `rah:expired`, `rah:dead`). Set as a side effect of the state transitions so the service account mailbox is legible in Outlook. These must not be read back as data by `rah`.
 4. **Folder** — where the message physically lives, for human triage and processing efficiency.
 

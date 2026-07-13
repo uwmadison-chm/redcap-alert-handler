@@ -156,15 +156,15 @@ The public, versioned, cross-repo API -- reviewed as such.
 
 * Slug matcher: take the subject up to the first `|` (or the whole subject when there is no `|`), trim surrounding whitespace, and look it up in the configured slugs. Exact match, so at most one route can ever claim a message. Note this is stricter than "begins with a slug": a subject like `consent followup` with no `|` matches nothing. Alert subjects must be `slug` or `slug|whatever`.
 * The dispatch core handles one message at a time; finding messages to process is the processor's job (step 7).
-* Decision function: (message state, route config, now) > action -- dispatch, wait-for-retry, expire, dead-letter, route-error. Pure and exhaustively table-tested; this is where the brief's state model becomes code.
-* Transition writer contracts: authoritative property first, then advisory category; retries-left decremented **before** dispatch.
-* Retry policy: initial retries-left and backoff > retry-time computation.
+* Decision function: (message state, route config, now) > action -- dispatch, wait-for-retry, expire, dead-letter, route-error. Pure and exhaustively table-tested; this is where the brief's state model becomes code. Settled 2026-07-13: the brief's processed marker became a terminal-state property (`rah-state`: completed/errored/expired/dead) written before every terminal move. A leftover marker means the move never landed, and the decision is to finish that move without re-dispatching -- route-error is the errored case of this. Precedence: unroutable beats a marker (config can change under in-flight mail), a marker beats everything else, expiry beats exhaustion beats a pending retry.
+* Transition writer contracts: authoritative property first, then advisory category; retries-left decremented **before** dispatch. Implemented as pure writers returning Patch/Move instructions for step 7 to execute; a Patch carries properties and categories in one request, so the ordering rule holds by construction.
+* Retry policy: initial retries-left and backoff > retry-time computation. Settled 2026-07-13: backoff is fixed (retry-time = failure time + retry_backoff), and retries-left counts attempts remaining -- max_retries = 3 means one initial try plus three retries, four runs total. The property namespace GUID in `dispatch.py` is permanent; changing it orphans state on live messages.
 
 **Done when:** the new/retrying/expired/unroutable/exhausted matrix is covered by table-driven tests with no mocks needed.
 
 ## 7. `rah process`
 
-The main event; everything above composes here. (Renamed from `rah watch`, settled 2026-07-12: the default is a single pass, `--watch` adds the polling loop.)
+This is the thing you'll actually run! (Renamed from `rah watch`, settled 2026-07-12: the default is a single pass, `--watch` adds the polling loop.)
 
 * One pass over the base folder: list > decide > claim (decrement + `rah:processing`) > dispatch on the worker thread pool > apply outcome (property, category, move) > exit once in-flight handlers finish. Messages whose retry-time hasn't arrived are left alone and don't delay exit; they're the next run's problem.
 * Exit status for a single pass: 0 if the pass completed, even when handlers failed -- the mailbox records those outcomes. Nonzero means infrastructure trouble: bad config, auth, Graph unreachable. This is what makes bare `rah process` cron-able.
