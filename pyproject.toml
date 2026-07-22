@@ -29,7 +29,7 @@ log_message = "redcap_alert_handler.handlers.log_message:log_message"
 
 [dependency-groups]
 dev = [
-    "ruff>=0.15",
+    "ruff>=0.15.22",
     "ty>=0.0.58",
     "pytest>=9.1",
     "pytest-xdist>=3.8",
