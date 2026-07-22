@@ -33,7 +33,7 @@ dev = [
     "ty>=0.0.58",
     "pytest>=9.1",
     "pytest-xdist>=3.8",
-    "rust-just>=1.55",
+    "rust-just>=1.56.0",
 ]
 
 [build-system]
