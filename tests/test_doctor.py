@@ -474,6 +474,29 @@ def test_network_failure_reports_advice_not_a_traceback(
     assert "Traceback" not in result.output
 
 
+def test_network_failure_at_app_construction_reports_advice(
+    write_config, cache_with_account, monkeypatch
+):
+    # The real-world path: msal's tenant discovery runs when the app is built,
+    # so a DNS outage raises inside build_app, before any refresh. doctor has
+    # to catch it there too, not just around refresh_silently.
+    config = write_config(cache_with_account)
+
+    def raise_it(*args, **kwargs):
+        raise requests.ConnectionError("Temporary failure in name resolution")
+
+    monkeypatch.setattr("redcap_alert_handler.auth.msal.ConfidentialClientApplication", raise_it)
+    result = runner.invoke(
+        app,
+        ["doctor", "--config", str(config), "--secrets", str(SECRETS / "good.toml")],
+        env=CLEAN_ENV,
+    )
+    assert result.exit_code == 1
+    assert "❌ token cache:" in result.output
+    assert "network/DNS" in result.output
+    assert "Traceback" not in result.output
+
+
 def test_broken_config_skips_the_cache_check():
     result = runner.invoke(
         app, ["doctor", "--config", str(CONFIGS / "bad_no_routes.toml")], env=CLEAN_ENV

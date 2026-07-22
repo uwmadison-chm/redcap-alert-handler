@@ -4,6 +4,7 @@
 
 from pathlib import Path
 
+import requests
 from typer.testing import CliRunner
 
 from redcap_alert_handler.cli.main import app
@@ -70,6 +71,26 @@ def test_silent_refresh_short_circuits(
     assert "✅" in result.output
     assert "cached token" in result.output
     assert "svc-rah@example.edu" in result.output
+
+
+def test_network_failure_reports_advice_and_never_prompts(
+    write_config, cache_with_account, monkeypatch
+):
+    # A DNS outage at build_app must exit with advice, not a traceback and not
+    # a sign-in prompt the operator can't complete offline.
+    config = write_config(cache_with_account)
+
+    def raise_it(*args, **kwargs):
+        raise requests.ConnectionError("Temporary failure in name resolution")
+
+    monkeypatch.setattr("redcap_alert_handler.auth.msal.ConfidentialClientApplication", raise_it)
+
+    result = _invoke(config)
+
+    assert result.exit_code == 1
+    assert "network/DNS" in result.output
+    assert "Traceback" not in result.output
+    assert "Redirect URL" not in result.output
 
 
 def test_silent_refresh_never_prompts(

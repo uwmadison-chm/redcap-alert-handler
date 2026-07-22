@@ -320,12 +320,14 @@ def _check_token_cache(
 
     # Diagnosis only: the refreshed token is deliberately not written back.
     # doctor may run as a user who can read the cache but shouldn't own it.
-    app = auth.build_app(secrets, cache)
     try:
+        # build_app is inside the try on purpose: msal does tenant discovery
+        # at construction, so a network/DNS outage raises here, not at the
+        # refresh. Report it as advice rather than spilling a requests
+        # traceback out of doctor.
+        app = auth.build_app(secrets, cache)
         result = auth.refresh_silently(app)
     except auth.AuthNetworkError as e:
-        # A network/DNS outage, not a bad token. Report it as advice rather
-        # than letting msal's requests traceback escape doctor.
         return CheckResult(name=name, passed=False, messages=(str(e),)), None
     if result is None:
         return CheckResult(

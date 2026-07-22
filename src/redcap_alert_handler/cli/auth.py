@@ -17,6 +17,7 @@ import typer
 
 from redcap_alert_handler.auth import (
     AuthError,
+    AuthNetworkError,
     build_app,
     describe_account,
     load_token_cache,
@@ -62,9 +63,14 @@ def auth(
 
     cache_path = loaded_config.global_config.token_cache_path
     cache = load_token_cache(cache_path)
-    app = build_app(loaded_secrets, cache)
-
-    result = refresh_silently(app)
+    try:
+        # Both calls reach Microsoft (construction does tenant discovery), so
+        # a network/DNS outage lands here as advice, not a requests traceback.
+        app = build_app(loaded_secrets, cache)
+        result = refresh_silently(app)
+    except AuthNetworkError as e:
+        logger.error("💥 %s", e)
+        raise typer.Exit(1) from e
     if result is not None:
         save_token_cache(cache, cache_path)
         logger.info(

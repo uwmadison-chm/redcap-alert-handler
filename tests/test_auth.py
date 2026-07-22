@@ -187,6 +187,24 @@ def test_auth_network_error_is_an_auth_error():
     assert issubclass(auth.AuthNetworkError, auth.AuthError)
 
 
+def test_build_app_reraises_a_construction_transport_error(monkeypatch):
+    # msal does tenant discovery at construction, so a real DNS outage lands
+    # inside build_app -- before any refresh. It must become AuthNetworkError
+    # there, or it escapes as a raw requests traceback (the actual bug this
+    # replaces: the earlier fix only wrapped the refresh call).
+    boom = requests.ConnectionError("Temporary failure in name resolution")
+
+    def raise_it(*args, **kwargs):
+        raise boom
+
+    monkeypatch.setattr(auth.msal, "ConfidentialClientApplication", raise_it)
+
+    with pytest.raises(auth.AuthNetworkError) as exc_info:
+        auth.build_app(SECRETS, msal.SerializableTokenCache())
+
+    assert exc_info.value.__cause__ is boom
+
+
 # --- result helpers ---
 
 

@@ -110,13 +110,23 @@ def cache_has_account(cache: msal.SerializableTokenCache) -> bool:
 def build_app(
     secrets: Secrets, cache: msal.SerializableTokenCache
 ) -> msal.ConfidentialClientApplication:
-    """Construct the msal confidential-client app, with the cache attached."""
-    return msal.ConfidentialClientApplication(
-        secrets.client_id,
-        authority=f"https://login.microsoftonline.com/{secrets.tenant_id}",
-        client_credential=secrets.client_secret,
-        token_cache=cache,
-    )
+    """Construct the msal confidential-client app, with the cache attached.
+
+    Raises:
+        AuthNetworkError: msal couldn't reach Microsoft. Construction does
+            tenant discovery (an openid-configuration fetch), so a DNS or
+            connection failure surfaces here, before any token call -- this
+            is the usual first place a network outage lands.
+    """
+    try:
+        return msal.ConfidentialClientApplication(
+            secrets.client_id,
+            authority=f"https://login.microsoftonline.com/{secrets.tenant_id}",
+            client_credential=secrets.client_secret,
+            token_cache=cache,
+        )
+    except requests.RequestException as e:
+        raise AuthNetworkError(e) from e
 
 
 def start_auth_flow(app: msal.ConfidentialClientApplication) -> dict:
