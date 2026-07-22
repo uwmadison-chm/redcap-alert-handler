@@ -392,6 +392,7 @@ dependencies = [
     { name = "httpx" },
     { name = "humanfriendly" },
     { name = "msal" },
+    { name = "requests" },
     { name = "typer" },
 ]
 
@@ -409,6 +410,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "humanfriendly", specifier = ">=10.0" },
     { name = "msal", specifier = ">=1.37.0" },
+    { name = "requests", specifier = ">=2.32" },
     { name = "typer", specifier = ">=0.26" },
 ]
 

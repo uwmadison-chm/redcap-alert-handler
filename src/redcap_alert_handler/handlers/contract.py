@@ -78,7 +78,7 @@ def build_context(global_config: GlobalConfig, route: RouteConfig) -> Context:
     `config` merges `global_config.extra` and `route.extra`, with the route's
     keys winning on a clash -- an operator can set a default in `[global]`
     and override it for one route without repeating everything else. Engine
-    keys (`mailbox`, `token_cache_path`, `polling_interval`, and the rest of
+    keys (`mailbox`, `token_cache_path`, `handler_timeout`, and the rest of
     `GlobalConfig`'s own fields) never appear here; only the `extra` tables
     do, plus `handler` and the resolved `max_age`, which every handler can
     read regardless of what its route's operator wrote.

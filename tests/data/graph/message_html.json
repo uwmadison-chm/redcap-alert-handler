@@ -1,0 +1,20 @@
+{
+  "id": "seed-placeholder",
+  "parentFolderId": "inbox",
+  "subject": "consent|participant 4022",
+  "internetMessageId": "<redcap-0003@redcap.example.edu>",
+  "from": {
+    "emailAddress": { "name": "REDCap", "address": "redcap@example.edu" }
+  },
+  "sender": {
+    "emailAddress": { "name": "REDCap", "address": "redcap@example.edu" }
+  },
+  "receivedDateTime": "2026-07-09T13:50:41Z",
+  "categories": [],
+  "singleValueExtendedProperties": [],
+  "body": {
+    "contentType": "html",
+    "content": "<html><body><p>slug = &quot;consent&quot;<br>\nparticipant_id = 4022<br>\n</p></body></html>"
+  },
+  "textBody": "slug = \"consent\"\nparticipant_id = 4022\n"
+}

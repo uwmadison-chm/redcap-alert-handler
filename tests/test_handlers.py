@@ -76,11 +76,11 @@ def _config(routes: dict[str, str]) -> Config:
         base_folder="inbox",
         token_cache_path=Path("/var/lib/rah/token-cache.json"),
         state_base_dir=Path("/var/lib/rah/state"),
-        polling_interval=timedelta(seconds=5),
         handler_timeout=timedelta(seconds=60),
         max_retries=5,
         retry_backoff=timedelta(minutes=5),
         max_age=timedelta(days=1),
+        max_workers=4,
         extra=MappingProxyType({}),
     )
     route_configs = {

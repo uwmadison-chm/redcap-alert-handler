@@ -50,11 +50,14 @@ Build the mailbox with methods on `fake_graph`:
 - `add_category(display_name, color)` seeds the master category list.
 
 Canned message bodies are files under `tests/data/graph/`. `message.json` is a
-plain REDCap-style alert; `message_with_state.json` already carries the
-`rah-retries-left` / `rah-retry-time` extended properties, which is the one to
-reach for when you're testing the property round-trip. House rule: message
-payloads are files, not inline strings. A new realistic message shape means a
-new file there.
+plain REDCap-style alert with a text-native body; `message_html.json` is the
+same alert with an html-native body plus a `textBody` key (see below);
+`message_with_state.json` already carries the `rah-retries-left` /
+`rah-retry-at` extended properties, which is the one to reach for when you're
+testing the property round-trip. Property ids in fixtures must be the
+`dispatch.PROP_*` strings exactly -- import them rather than retyping. House
+rule: message payloads are files, not inline strings. A new realistic message
+shape means a new file there.
 
 ## What the fake actually models
 
@@ -66,7 +69,13 @@ new file there.
   cope with that, so the fake makes you cope with it.
 - Paging: set `fake_graph.page_size = 2`, add more than that, and
   `list_messages` will follow `@odata.nextLink` across pages. `fake_graph.requests`
-  logs every `(method, url)` if you want to prove it made three calls, not one.
+  logs every `(method, url)` if you want to prove it made three calls, not one;
+  `fake_graph.request_headers` is the parallel list of each request's headers.
+- Body renderings: `get_message(id, body_format="text")` sends
+  `Prefer: outlook.body-content-type="text"`, and the fake honors it on GET.
+  An html-native message comes back with its fixture's `textBody` value as a
+  text body; a text-native one is unchanged. `textBody` itself is fixture-only
+  scaffolding and never appears in a served response.
 
 ## Injecting failures
 

@@ -36,7 +36,7 @@ Each poll cycle does three jobs:
 2. re-dispatch messages whose retry-time has passed — the poll loop *is* the retry scheduler and the crash-recovery sweep;
 3. refresh the OAuth token if it's due (see Auth).
 
-The poll interval is set in the config file and overridable on the `rah process --watch` command line; 5 seconds is a reasonable default. Throttle headroom is enormous — Graph's Exchange limit is 10,000 requests per 10 minutes per mailbox per app, and a 5-second poll uses about 120 — so if some use case ever needs faster reaction, the fix is a smaller interval, not a redesign.
+The poll interval is set with `--poll-interval` on the `rah process --watch` command line; the 5-second default is reasonable for most anything. (It was a config key until 2026-07-13; an interval means nothing without `--watch`, so it moved to the option.) Throttle headroom is enormous — Graph's Exchange limit is 10,000 requests per 10 minutes per mailbox per app, and a 5-second poll uses about 120 — so if some use case ever needs faster reaction, the fix is a smaller interval, not a redesign.
 
 The process reads a TOML config describing a collection of **routes**. Each route entry has at least:
 * a unique **slug** (the key);
@@ -199,7 +199,7 @@ Environment=RAH_SECRETS=%d/secrets.toml
 
 Multi-command, git-like, built with **typer** (`@typer.group()` + subcommands):
 
-* `rah process` — the main event: one pass of the decide/claim/dispatch cycle described in the Design Overview, exiting once in-flight handlers finish. `--watch` repeats the pass forever in the foreground (systemd handles process management); `--poll-interval` overrides the config value in watch mode.
+* `rah process` — the main event: one pass of the decide/claim/dispatch cycle described in the Design Overview, exiting once in-flight handlers finish. `--watch` repeats the pass forever in the foreground (systemd handles process management); `--poll-interval` sets the interval in watch mode, 5 seconds by default.
 * `rah auth` — runs the delegated OAuth flow; stores the token cache at the location given in the main config.
 * Replaying failed mail — probably `--dead-letters` / `--errors` flags on `rah process` rather than a separate `rah reprocess` command (direction settled 2026-07-12; the spelling gets settled at implementation). Replay covers both `dead-letters` and the `{slug}/error` folders, **on demand**. It does not dispatch anything in place: it resets the message's machine state (retries-left, retry-time) and moves it back to the base folder, where the normal pass claims it like any new message — replay never grows a second claim/move code path, so the single-writer invariant holds. Not automatic: the usual cause is a missing/wrong config, and a human should fix config before replaying.
 * `rah doctor` — local diagnostics, standing in for a /health endpoint: parses the config, lists loaded routes and their resolved handler entry points, checks the secrets file and token cache, and makes a live Graph call to verify mailbox access and folder layout. Human-readable output, nonzero exit status on failure so it can back a cron or monitoring check. `--fix` idempotently provisions anything missing in the mailbox (route folders, the `rah:*` master category list).

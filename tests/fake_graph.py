@@ -20,6 +20,12 @@ Canned message bodies are files under data/graph/; `add_message` clones one
 and applies overrides. Error injection (`enqueue_status`, `enqueue_exception`)
 serves forced responses ahead of normal routing so retry and failure paths
 get exercised without a real server.
+
+A fixture may also carry a `textBody` key alongside its native `body`: the
+text rendering Graph would serve for `Prefer: outlook.body-content-type="text"`
+on a GET. Like the extended properties, it's never handed back verbatim --
+only substituted for `body` when that header asks for it, and stripped from
+every ordinary response.
 """
 
 from __future__ import annotations
@@ -38,6 +44,7 @@ DATA_GRAPH = Path(__file__).parent / "data" / "graph"
 
 _EXPAND_ID_RE = re.compile(r"id eq '([^']*)'")
 _DISPLAY_NAME_RE = re.compile(r"displayName eq '((?:[^']|'')*)'")
+_BODY_FORMAT_RE = re.compile(r'outlook\.body-content-type="([^"]*)"')
 
 
 class FakeGraph:
@@ -51,8 +58,11 @@ class FakeGraph:
         self.messages: dict[str, dict] = {}
         self.categories: list[dict] = []
         # Every request lands here as (method, url) so tests can assert paging
-        # actually followed a nextLink, etc.
+        # actually followed a nextLink, etc. request_headers is a parallel
+        # list, kept separate so nothing already asserting on `requests`
+        # tuples has to change shape.
         self.requests: list[tuple[str, str]] = []
+        self.request_headers: list[httpx.Headers] = []
 
         self._well_known: dict[str, str] = {}
         self._forced: deque[httpx.Response | Exception] = deque()
@@ -146,6 +156,7 @@ class FakeGraph:
 
     def _handle(self, request: httpx.Request) -> httpx.Response:
         self.requests.append((request.method, str(request.url)))
+        self.request_headers.append(request.headers)
         if self._forced:
             forced = self._forced.popleft()
             if isinstance(forced, Exception):
@@ -180,7 +191,7 @@ class FakeGraph:
                     return self._create_child_folder(folder_ref, request)
             case ["messages", message_id]:
                 if method == "GET":
-                    return self._get_message(message_id, params)
+                    return self._get_message(message_id, params, request.headers)
                 if method == "PATCH":
                     return self._patch_message(message_id, request)
             case ["messages", message_id, "move"]:
@@ -205,11 +216,16 @@ class FakeGraph:
             body["@odata.nextLink"] = str(next_url)
         return _json(200, body)
 
-    def _get_message(self, message_id: str, params: httpx.QueryParams) -> httpx.Response:
+    def _get_message(
+        self, message_id: str, params: httpx.QueryParams, headers: httpx.Headers
+    ) -> httpx.Response:
         message = self.messages.get(message_id)
         if message is None:
             return _error(404, "ErrorItemNotFound", f"no message {message_id}")
-        return _json(200, _project(message, _parse_expand(params.get("$expand"))))
+        projected = _project(message, _parse_expand(params.get("$expand")))
+        if _parse_body_format(headers.get("prefer")) == "text":
+            projected["body"] = _text_rendering(message)
+        return _json(200, projected)
 
     def _patch_message(self, message_id: str, request: httpx.Request) -> httpx.Response:
         message = self.messages.get(message_id)
@@ -287,8 +303,14 @@ class FakeGraph:
 
 
 def _project(message: dict, expand_ids: set[str] | None) -> dict:
-    """A message as Graph would return it: extended props only when expanded."""
-    projected = {k: v for k, v in message.items() if k != "singleValueExtendedProperties"}
+    """A message as Graph would return it: extended props only when expanded.
+
+    textBody is fixture-only scaffolding for the Prefer-header behavior
+    (see _text_rendering); real Graph never has such a field, so it's
+    stripped here alongside singleValueExtendedProperties.
+    """
+    hidden = {"singleValueExtendedProperties", "textBody"}
+    projected = {k: v for k, v in message.items() if k not in hidden}
     if expand_ids is not None:
         props = message.get("singleValueExtendedProperties", [])
         projected["singleValueExtendedProperties"] = [p for p in props if p["id"] in expand_ids]
@@ -300,6 +322,27 @@ def _parse_expand(expand: str | None) -> set[str] | None:
     if expand is None:
         return None
     return set(_EXPAND_ID_RE.findall(expand))
+
+
+def _parse_body_format(prefer: str | None) -> str | None:
+    """The body-content-type requested via a Prefer header, if any."""
+    if prefer is None:
+        return None
+    match = _BODY_FORMAT_RE.search(prefer)
+    return match.group(1) if match else None
+
+
+def _text_rendering(message: dict) -> dict:
+    """The body Graph would serve for Prefer: outlook.body-content-type="text".
+
+    An already-text native body comes back unchanged; an html one is
+    replaced by textBody, falling back to the native content for a fixture
+    that hasn't bothered to set one.
+    """
+    native = message.get("body", {})
+    if native.get("contentType") != "html":
+        return native
+    return {"contentType": "text", "content": message.get("textBody", native.get("content"))}
 
 
 def _parse_display_name(filter_clause: str | None) -> str | None:

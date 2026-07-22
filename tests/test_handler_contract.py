@@ -92,11 +92,11 @@ def _global_config(**overrides):
         "base_folder": "inbox",
         "token_cache_path": Path("/var/lib/rah/token-cache.json"),
         "state_base_dir": Path("/var/lib/rah/state"),
-        "polling_interval": timedelta(seconds=5),
         "handler_timeout": timedelta(seconds=60),
         "max_retries": 5,
         "retry_backoff": timedelta(minutes=5),
         "max_age": timedelta(days=1),
+        "max_workers": 4,
         "extra": MappingProxyType({}),
     }
     fields.update(overrides)
@@ -175,10 +175,10 @@ _ENGINE_KEYS = (
     "base_folder",
     "token_cache_path",
     "state_base_dir",
-    "polling_interval",
     "handler_timeout",
     "max_retries",
     "retry_backoff",
+    "max_workers",
 )
 
 

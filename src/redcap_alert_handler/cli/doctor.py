@@ -44,7 +44,12 @@ from redcap_alert_handler.config import (
 from redcap_alert_handler.graph import GraphClient, GraphError
 from redcap_alert_handler.handlers.loader import HandlerResolutionError, load_handlers
 from redcap_alert_handler.logs import get_logger
-from redcap_alert_handler.mailbox import missing_categories, resolve_layout, seed_categories
+from redcap_alert_handler.mailbox import (
+    missing_categories,
+    resolve_base_folder,
+    resolve_layout,
+    seed_categories,
+)
 
 logger = get_logger(__name__)
 
@@ -316,7 +321,12 @@ def _check_token_cache(
     # Diagnosis only: the refreshed token is deliberately not written back.
     # doctor may run as a user who can read the cache but shouldn't own it.
     app = auth.build_app(secrets, cache)
-    result = auth.refresh_silently(app)
+    try:
+        result = auth.refresh_silently(app)
+    except auth.AuthNetworkError as e:
+        # A network/DNS outage, not a bad token. Report it as advice rather
+        # than letting msal's requests traceback escape doctor.
+        return CheckResult(name=name, passed=False, messages=(str(e),)), None
     if result is None:
         return CheckResult(
             name=name,
@@ -404,7 +414,7 @@ def _check_graph_folder(
 ) -> tuple[CheckResult, str | None]:
     base_folder = global_config.base_folder
     mailbox = global_config.mailbox
-    folder = _resolve_base_folder(client, base_folder)
+    folder = resolve_base_folder(client, base_folder)
     if folder is None:
         # "inbox" is well-known and always exists, so a missing base folder is
         # always a named one we can create under the mailbox root.
@@ -464,15 +474,6 @@ def _check_categories(client: GraphClient, fix: bool) -> CheckResult:
             messages=(f"missing {', '.join(missing)}; run rah init to seed them",),
         )
     return CheckResult(name="categories", passed=True)
-
-
-def _resolve_base_folder(client: GraphClient, base_folder: str) -> dict | None:
-    # "inbox" means the real Inbox (a well-known folder); anything else is a
-    # named child of the mailbox root, matching how config validates it.
-    if base_folder == "inbox":
-        return client.get_well_known_folder("inbox")
-    root = client.get_well_known_folder("msgFolderRoot")
-    return client.find_child_folder(root["id"], base_folder)
 
 
 def _graph_skip(reason: str) -> CheckResult:

@@ -21,6 +21,7 @@ from redcap_alert_handler.cli.conventions import (
     setup_logging,
 )
 from redcap_alert_handler.cli.doctor import doctor, init
+from redcap_alert_handler.cli.process import process
 from redcap_alert_handler.logs import get_logger
 
 app = typer.Typer(name="rah")
@@ -29,6 +30,7 @@ logger = get_logger(__name__)
 app.command(name="auth")(auth)
 app.command(name="doctor")(doctor)
 app.command(name="init")(init)
+app.command(name="process")(process)
 
 
 def _print_version(value: bool) -> None:

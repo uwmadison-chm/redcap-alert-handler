@@ -47,12 +47,14 @@ class _FakeApp:
         self,
         accounts=(),
         silent_result=None,
+        silent_raises=None,
         flow=None,
         redeem_result=None,
         redeem_raises=None,
     ):
         self.accounts = list(accounts)
         self.silent_result = silent_result
+        self.silent_raises = silent_raises
         self.flow = flow or {
             "auth_uri": "https://login.microsoftonline.com/fake/authorize?client_id=x",
             "state": "abc123",
@@ -68,6 +70,8 @@ class _FakeApp:
 
     def acquire_token_silent(self, scopes, account=None):
         self.silent_calls.append((scopes, account))
+        if self.silent_raises is not None:
+            raise self.silent_raises
         return self.silent_result
 
     def initiate_auth_code_flow(self, scopes, redirect_uri=None):
@@ -164,17 +168,21 @@ def graph_client(fake_graph, sleep_spy):
 
 @pytest.fixture
 def install_fake_graph(monkeypatch):
-    """Patch doctor's GraphClient so its Graph check runs against a fake mailbox.
+    """Patch a CLI module's GraphClient so it runs against a fake mailbox.
 
-    Same idea as install_fake_msal: swap the name doctor constructs so nothing
-    reaches the network. Pass a FakeGraph to seed state, or take the default.
+    Same idea as install_fake_msal: swap the name the command constructs so
+    nothing reaches the network. Defaults to the doctor module; pass
+    `module=` to patch another command's GraphClient (process uses this).
+    Pass a FakeGraph to seed state, or take the default.
     """
 
-    def install(fake=None):
+    def install(fake=None, module=None):
         from fake_graph import FakeGraph
 
-        import redcap_alert_handler.cli.doctor
         from redcap_alert_handler.graph import GraphClient
+
+        if module is None:
+            import redcap_alert_handler.cli.doctor as module
 
         fake = fake if fake is not None else FakeGraph()
 
@@ -186,7 +194,7 @@ def install_fake_graph(monkeypatch):
                 sleep=lambda seconds: None,
             )
 
-        monkeypatch.setattr(redcap_alert_handler.cli.doctor, "GraphClient", factory)
+        monkeypatch.setattr(module, "GraphClient", factory)
         return fake
 
     return install

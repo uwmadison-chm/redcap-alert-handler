@@ -6,6 +6,7 @@ handler_timeout = "60s"
 max_retries = 5
 retry_backoff = "5m"
 max_age = "1d"
+max_workers = true
 
-[routes.bad-slug]
-handler = "rah.handlers:log_message"
+[routes.simple]
+handler = "redcap-alert-handler:log_message"

@@ -12,6 +12,9 @@ dependencies = [
     "humanfriendly>=10.0",
     "msal>=1.37.0",
     "httpx>=0.28.1",
+    # msal already pulls in requests; we depend on it directly to catch its
+    # transport exceptions when a token refresh can't reach Microsoft.
+    "requests>=2.32",
 ]
 
 [project.urls]

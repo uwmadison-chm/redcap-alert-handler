@@ -13,11 +13,11 @@
   "categories": ["rah:processing"],
   "singleValueExtendedProperties": [
     {
-      "id": "String {66f5a359-4659-4830-9070-00047ec6ac6e} Name rah-retries-left",
+      "id": "Integer {a52b54e5-d9b2-410a-aa59-bdf5e3d571d6} Name rah-retries-left",
       "value": "3"
     },
     {
-      "id": "String {66f5a359-4659-4830-9070-00047ec6ac6e} Name rah-retry-time",
+      "id": "SystemTime {a52b54e5-d9b2-410a-aa59-bdf5e3d571d6} Name rah-retry-at",
       "value": "2026-07-09T15:00:00Z"
     }
   ],

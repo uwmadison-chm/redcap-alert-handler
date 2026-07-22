@@ -88,7 +88,7 @@ Most configuration is stored in the TOML-based config file, rather than passed a
   * base_folder (optional, default `"inbox"`) -- the folder the watcher polls; slug folders and `dead-letters` live under it. A named folder here lets a dev setup run against a folder in a personal account instead of a dedicated mailbox.
   * token cache path (absolute)
   * state base dir (absolute)
-  * polling interval
+  * max_workers (optional, default 4) -- the handler worker-pool size (added 2026-07-13 during step 7, which also removed the polling interval key: the interval means nothing without `--watch`, so it's the `--poll-interval` option now)
   * handler timeout
   * retry / backoff settings: `max_retries` (a non-negative int) and `retry_backoff` (a duration)
   * max_age (the default for routes that don't set their own)
@@ -167,10 +167,12 @@ The public, versioned, cross-repo API -- reviewed as such.
 This is the thing you'll actually run! (Renamed from `rah watch`, settled 2026-07-12: the default is a single pass, `--watch` adds the polling loop.)
 
 * One pass over the base folder: list > decide > claim (decrement + `rah:processing`) > dispatch on the worker thread pool > apply outcome (property, category, move) > exit once in-flight handlers finish. Messages whose retry-time hasn't arrived are left alone and don't delay exit; they're the next run's problem.
+* Message bodies (settled 2026-07-13): the native body from the folder listing fills whichever `Message` body field matches its content type. When it's HTML, one extra GET with `Prefer: outlook.body-content-type="text"` fetches the text rendering -- for dispatched messages only, since nothing else reads a body.
 * Exit status for a single pass: 0 if the pass completed, even when handlers failed -- the mailbox records those outcomes. Nonzero means infrastructure trouble: bad config, auth, Graph unreachable. This is what makes bare `rah process` cron-able.
-* `--watch` repeats the pass forever (interval from config, `--poll-interval` override). Same loop body; the flag only adds the sleep.
+* `--watch` repeats the pass forever. Same loop body; the flag only adds the sleep. The interval comes from `--poll-interval` (default `"5s"`, humanfriendly durations) -- settled 2026-07-13: the `polling_interval` config key is gone, since the interval means nothing without `--watch` and requiring it in config made cron-only deployments write one anyway. `--poll-interval` without `--watch` warns and runs the single pass normally.
+* Infrastructure trouble mid-pass under `--watch` -- Graph unreachable, unexpected Graph errors -- logs loudly and keeps polling, matching the auth-failure policy (settled 2026-07-13). Nonzero exit stays reserved for what fails at startup in both modes: bad config, unresolvable handlers.
 * Single-writer still holds across modes: a cron-launched `rah process` overlapping a `--watch` service is two writers. Run one or the other against a mailbox, never both.
-* Timeout = abandon, per the brief; abandoned-thread accounting in logs. (Also why one-shot mode still uses the pool -- you can't abandon the main thread.)
+* Timeout = abandon, per the brief; abandoned-thread accounting in logs. (Also why one-shot mode still uses the pool -- you can't abandon the main thread.) Settled 2026-07-13: the pool is a small daemon-thread pool of rah's own, sized by `max_workers`, not `ThreadPoolExecutor` -- the stdlib pool's non-daemon workers are joined at interpreter exit, so a hung handler would block `rah process` from exiting and permanently eat a slot. Abandoned workers are logged and replaced, so capacity holds; a still-hung thread dies with the process, which is the crash case claim-first idempotency already covers.
 * Hourly proactive token refresh inside the loop; on auth failure, keep polling, log loudly, re-read the cache each cycle. A single pass just refreshes if due at startup.
 * Clean shutdown on SIGTERM/SIGINT: stop claiming, let in-flight handlers finish (bounded), exit 0.
 * One log line per message state transition -- the mailbox-legibility story's stderr counterpart.

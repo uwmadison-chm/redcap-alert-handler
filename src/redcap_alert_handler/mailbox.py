@@ -112,6 +112,19 @@ def resolve_layout(
     )
 
 
+def resolve_base_folder(client: GraphClient, base_folder: str) -> dict | None:
+    """Find the base folder rah polls, or None when there's no such folder.
+
+    "inbox" means the real Inbox (a well-known folder that always exists);
+    any other name is a child of the mailbox root, matching how config
+    validates base_folder. Returns the Graph folder dict.
+    """
+    if base_folder == "inbox":
+        return client.get_well_known_folder("inbox")
+    root = client.get_well_known_folder("msgFolderRoot")
+    return client.find_child_folder(root["id"], base_folder)
+
+
 def missing_categories(client: GraphClient) -> tuple[str, ...]:
     """The RAH_CATEGORIES names not present in the mailbox, in RAH_CATEGORIES order."""
     present = {category["displayName"] for category in client.list_categories()}

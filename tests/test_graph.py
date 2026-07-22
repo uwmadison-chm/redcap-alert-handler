@@ -5,12 +5,8 @@
 import httpx
 import pytest
 
+from redcap_alert_handler.dispatch import PROP_RETRIES_LEFT, PROP_RETRY_AT
 from redcap_alert_handler.graph import GraphClient, GraphError
-
-# The two extended-property ids the state fixture carries.
-RETRIES_LEFT = "String {66f5a359-4659-4830-9070-00047ec6ac6e} Name rah-retries-left"
-RETRY_TIME = "String {66f5a359-4659-4830-9070-00047ec6ac6e} Name rah-retry-time"
-
 
 # --- listing and paging ---
 
@@ -60,12 +56,12 @@ def test_list_messages_expands_extended_properties(fake_graph, graph_client):
     fake_graph.add_message(fake_graph.inbox_id, fixture="message_with_state.json")
 
     messages = graph_client.list_messages(
-        fake_graph.inbox_id, expand_properties=(RETRIES_LEFT, RETRY_TIME)
+        fake_graph.inbox_id, expand_properties=(PROP_RETRIES_LEFT, PROP_RETRY_AT)
     )
 
     props = {p["id"]: p["value"] for p in messages[0]["singleValueExtendedProperties"]}
-    assert props[RETRIES_LEFT] == "3"
-    assert props[RETRY_TIME] == "2026-07-09T15:00:00Z"
+    assert props[PROP_RETRIES_LEFT] == "3"
+    assert props[PROP_RETRY_AT] == "2026-07-09T15:00:00Z"
 
 
 def test_list_messages_omits_properties_without_expand(fake_graph, graph_client):
@@ -90,10 +86,10 @@ def test_get_message_returns_it(fake_graph, graph_client):
 def test_get_message_expand_round_trips(fake_graph, graph_client):
     added = fake_graph.add_message(fake_graph.inbox_id, fixture="message_with_state.json")
 
-    message = graph_client.get_message(added["id"], expand_properties=(RETRIES_LEFT,))
+    message = graph_client.get_message(added["id"], expand_properties=(PROP_RETRIES_LEFT,))
 
     props = {p["id"]: p["value"] for p in message["singleValueExtendedProperties"]}
-    assert props == {RETRIES_LEFT: "3"}
+    assert props == {PROP_RETRIES_LEFT: "3"}
 
 
 def test_get_missing_message_raises(fake_graph, graph_client):
@@ -101,6 +97,51 @@ def test_get_missing_message_raises(fake_graph, graph_client):
         graph_client.get_message("nope")
 
     assert exc_info.value.status == 404
+
+
+# --- body rendering ---
+
+
+def test_get_message_without_body_format_returns_the_native_body(fake_graph, graph_client):
+    added = fake_graph.add_message(fake_graph.inbox_id, fixture="message_html.json")
+
+    message = graph_client.get_message(added["id"])
+
+    assert message["body"] == added["body"]
+
+
+def test_get_message_body_format_text_renders_an_html_native_body(fake_graph, graph_client):
+    added = fake_graph.add_message(fake_graph.inbox_id, fixture="message_html.json")
+
+    message = graph_client.get_message(added["id"], body_format="text")
+
+    assert message["body"] == {"contentType": "text", "content": added["textBody"]}
+
+
+def test_get_message_body_format_sends_the_prefer_header(fake_graph, graph_client):
+    added = fake_graph.add_message(fake_graph.inbox_id, fixture="message_html.json")
+
+    graph_client.get_message(added["id"], body_format="text")
+
+    assert fake_graph.request_headers[-1]["Prefer"] == 'outlook.body-content-type="text"'
+
+
+def test_get_message_body_format_text_leaves_a_text_native_body_unchanged(fake_graph, graph_client):
+    added = fake_graph.add_message(fake_graph.inbox_id)  # message.json is text-native
+
+    message = graph_client.get_message(added["id"], body_format="text")
+
+    assert message["body"] == added["body"]
+
+
+def test_text_body_never_appears_in_a_response(fake_graph, graph_client):
+    fake_graph.add_message(fake_graph.inbox_id, fixture="message_html.json")
+
+    listed = graph_client.list_messages(fake_graph.inbox_id)
+    fetched = graph_client.get_message(listed[0]["id"])
+
+    assert "textBody" not in listed[0]
+    assert "textBody" not in fetched
 
 
 # --- patching ---
@@ -117,10 +158,10 @@ def test_patch_sets_categories(fake_graph, graph_client):
 def test_patch_sets_extended_properties(fake_graph, graph_client):
     added = fake_graph.add_message(fake_graph.inbox_id)
 
-    graph_client.patch_message(added["id"], properties={RETRIES_LEFT: "2"})
+    graph_client.patch_message(added["id"], properties={PROP_RETRIES_LEFT: "2"})
 
     stored = fake_graph.messages[added["id"]]["singleValueExtendedProperties"]
-    assert {"id": RETRIES_LEFT, "value": "2"} in stored
+    assert {"id": PROP_RETRIES_LEFT, "value": "2"} in stored
 
 
 # --- moving ---

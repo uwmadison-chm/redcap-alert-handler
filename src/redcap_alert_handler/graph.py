@@ -108,12 +108,28 @@ class GraphClient:
             params = None
         return messages
 
-    def get_message(self, message_id: str, expand_properties: Sequence[str] = ()) -> dict:
-        """One message, optionally with its named extended properties expanded."""
+    def get_message(
+        self,
+        message_id: str,
+        expand_properties: Sequence[str] = (),
+        *,
+        body_format: str | None = None,
+    ) -> dict:
+        """One message, optionally with its named extended properties expanded.
+
+        Graph stores one native body per message, usually HTML. Passing
+        body_format="text" asks for the text rendering instead, via the
+        Prefer header rather than a query parameter.
+        """
         params = None
         if expand_properties:
             params = {"$expand": _expand_clause(expand_properties)}
-        return self._request("GET", f"{self._base}/messages/{message_id}", params=params)
+        headers = None
+        if body_format is not None:
+            headers = {"Prefer": f'outlook.body-content-type="{body_format}"'}
+        return self._request(
+            "GET", f"{self._base}/messages/{message_id}", params=params, extra_headers=headers
+        )
 
     def patch_message(
         self,
@@ -187,8 +203,11 @@ class GraphClient:
         *,
         params: dict[str, str] | None = None,
         json_body: object = None,
+        extra_headers: Mapping[str, str] | None = None,
     ) -> dict:
         headers = {"Authorization": f"Bearer {self._get_token()}"}
+        if extra_headers:
+            headers.update(extra_headers)
         for attempt in range(1, self._max_attempts + 1):
             try:
                 response = self._client.request(

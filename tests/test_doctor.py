@@ -8,6 +8,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+import requests
 from typer.testing import CliRunner
 
 from redcap_alert_handler.cli.main import app
@@ -448,6 +449,29 @@ def test_unrefreshable_cache_fails(write_config, cache_with_account, fake_app, i
     assert result.exit_code == 1
     assert "❌ token cache:" in result.output
     assert "rah auth" in result.output
+
+
+def test_network_failure_reports_advice_not_a_traceback(
+    write_config, cache_with_account, fake_app, install_fake_msal
+):
+    # A DNS/connection outage during refresh must read as a check failure with
+    # advice, not spill msal's requests traceback out of doctor.
+    config = write_config(cache_with_account)
+    install_fake_msal(
+        fake_app(
+            accounts=ACCOUNTS,
+            silent_raises=requests.ConnectionError("Temporary failure in name resolution"),
+        )
+    )
+    result = runner.invoke(
+        app,
+        ["doctor", "--config", str(config), "--secrets", str(SECRETS / "good.toml")],
+        env=CLEAN_ENV,
+    )
+    assert result.exit_code == 1
+    assert "❌ token cache:" in result.output
+    assert "network/DNS" in result.output
+    assert "Traceback" not in result.output
 
 
 def test_broken_config_skips_the_cache_check():

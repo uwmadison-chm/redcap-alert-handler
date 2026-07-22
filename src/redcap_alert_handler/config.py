@@ -32,11 +32,11 @@ _GLOBAL_KNOWN_KEYS = frozenset(
         "base_folder",
         "token_cache_path",
         "state_base_dir",
-        "polling_interval",
         "handler_timeout",
         "max_retries",
         "retry_backoff",
         "max_age",
+        "max_workers",
     }
 )
 _ROUTE_KNOWN_KEYS = frozenset({"handler", "max_age"})
@@ -64,11 +64,11 @@ class GlobalConfig:
     base_folder: str
     token_cache_path: Path
     state_base_dir: Path
-    polling_interval: timedelta
     handler_timeout: timedelta
     max_retries: int
     retry_backoff: timedelta
     max_age: timedelta
+    max_workers: int
     extra: Mapping[str, object]
 
 
@@ -212,9 +212,10 @@ def _parse_global(
     token_cache_path = _parse_abs_path(global_raw, "token_cache_path", "global", problems)
     state_base_dir = _parse_abs_path(global_raw, "state_base_dir", "global", problems)
     max_retries = _parse_max_retries(global_raw, problems)
+    max_workers = _parse_max_workers(global_raw, problems)
 
     durations: dict[str, timedelta | None] = {}
-    for key in ("polling_interval", "handler_timeout", "retry_backoff", "max_age"):
+    for key in ("handler_timeout", "retry_backoff", "max_age"):
         durations[key] = _parse_duration(global_raw, key, "global", problems)
 
     extra = {k: v for k, v in global_raw.items() if k not in _GLOBAL_KNOWN_KEYS}
@@ -227,11 +228,10 @@ def _parse_global(
     assert token_cache_path is not None
     assert state_base_dir is not None
     assert max_retries is not None
-    polling_interval = durations["polling_interval"]
+    assert max_workers is not None
     handler_timeout = durations["handler_timeout"]
     retry_backoff = durations["retry_backoff"]
     max_age = durations["max_age"]
-    assert polling_interval is not None
     assert handler_timeout is not None
     assert retry_backoff is not None
     assert max_age is not None
@@ -241,11 +241,11 @@ def _parse_global(
             base_folder=base_folder,
             token_cache_path=token_cache_path,
             state_base_dir=state_base_dir,
-            polling_interval=polling_interval,
             handler_timeout=handler_timeout,
             max_retries=max_retries,
             retry_backoff=retry_backoff,
             max_age=max_age,
+            max_workers=max_workers,
             extra=MappingProxyType(extra),
         ),
         [],
@@ -397,6 +397,22 @@ def _parse_max_retries(raw: dict[str, object], problems: list[str]) -> int | Non
         return None
     if value < 0:
         problems.append(f"global.{key}: must be zero or greater")
+        return None
+    return value
+
+
+def _parse_max_workers(raw: dict[str, object], problems: list[str]) -> int | None:
+    key = "max_workers"
+    if key not in raw:
+        return 4
+    value = raw[key]
+    # bool is a subclass of int in Python, so TOML's true/false would
+    # otherwise sneak through as 1/0.
+    if isinstance(value, bool) or not isinstance(value, int):
+        problems.append(f"global.{key}: must be a whole number, not {value!r}")
+        return None
+    if value < 1:
+        problems.append(f"global.{key}: must be at least 1; a pool needs a worker")
         return None
     return value
 

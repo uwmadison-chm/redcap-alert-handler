@@ -21,11 +21,12 @@ def test_load_good_minimal_config():
     assert config.global_config.base_folder == "inbox"
     assert config.global_config.token_cache_path == Path("/var/lib/rah/token-cache.json")
     assert config.global_config.state_base_dir == Path("/var/lib/rah/state")
-    assert config.global_config.polling_interval == timedelta(seconds=5)
     assert config.global_config.handler_timeout == timedelta(seconds=60)
     assert config.global_config.max_retries == 5
     assert config.global_config.retry_backoff == timedelta(minutes=5)
     assert config.global_config.max_age == timedelta(days=1)
+    # not set in the fixture: the worker pool defaults to 4
+    assert config.global_config.max_workers == 4
     assert config.global_config.extra == {}
 
     assert set(config.routes) == {"simple"}
@@ -40,6 +41,7 @@ def test_load_good_full_config():
     config = load_config(CONFIGS / "good_full.toml")
 
     assert config.global_config.base_folder == "rah"
+    assert config.global_config.max_workers == 2
     assert config.global_config.extra == {"graph_base_url": "https://graph.microsoft.com/v1.0"}
     assert set(config.routes) == {"consent", "push_alert"}
 
@@ -61,17 +63,20 @@ BAD_CONFIGS = [
         "bad_missing_global_keys.toml",
         [
             "global.mailbox",
-            "global.polling_interval",
             "global.handler_timeout",
             "global.max_retries",
             "global.retry_backoff",
             "global.max_age",
         ],
     ),
-    ("bad_wrong_types.toml", ["global.token_cache_path", "global.polling_interval"]),
+    ("bad_wrong_types.toml", ["global.token_cache_path", "global.handler_timeout"]),
     ("bad_relative_paths.toml", ["global.token_cache_path", "global.state_base_dir"]),
-    ("bad_duration_strings.toml", ["global.polling_interval"]),
-    ("bad_nonpositive_durations.toml", ["global.polling_interval", "global.handler_timeout"]),
+    ("bad_duration_strings.toml", ["global.retry_backoff"]),
+    ("bad_nonpositive_durations.toml", ["global.handler_timeout", "global.max_age"]),
+    ("bad_max_workers_zero.toml", ["global.max_workers"]),
+    ("bad_max_workers_negative.toml", ["global.max_workers"]),
+    ("bad_max_workers_bool.toml", ["global.max_workers"]),
+    ("bad_max_workers_wrong_type.toml", ["global.max_workers"]),
     ("bad_slug.toml", ["routes.bad-slug"]),
     ("bad_missing_handler.toml", ["routes.myslug"]),
     ("bad_empty_handler.toml", ["routes.myslug"]),
