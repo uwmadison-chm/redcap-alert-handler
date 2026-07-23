@@ -42,7 +42,7 @@ MAX_AGE = timedelta(days=1)
 
 
 def _route(slug="consent", max_age=MAX_AGE):
-    return RouteConfig(slug=slug, handler="pkg:handler", max_age=max_age, extra={})
+    return RouteConfig(slug=slug, handler="pkg:handler", max_age=max_age, dry_run=False, extra={})
 
 
 def _state(**overrides):

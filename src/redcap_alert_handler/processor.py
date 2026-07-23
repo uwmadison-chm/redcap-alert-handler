@@ -44,8 +44,10 @@ class PassStats:
 
     dispatched is the number of handlers this pass started; each of those
     resolves to exactly one of completed, transient_failures,
-    permanent_failures, or abandoned, so those four sum back to dispatched.
-    The rest cover the decisions that never reach a handler.
+    permanent_failures, abandoned, or dry_run, so those five sum back to
+    dispatched. dry_run collects every outcome from a dry-run route, since
+    none of them is written back. The rest cover the decisions that never
+    reach a handler.
     """
 
     dispatched: int = 0
@@ -53,11 +55,23 @@ class PassStats:
     transient_failures: int = 0
     permanent_failures: int = 0
     abandoned: int = 0
+    dry_run: int = 0
     expired: int = 0
     dead_lettered: int = 0
     finished: int = 0
     waiting: int = 0
     skipped: int = 0
+
+
+# What a real pass would have done, keyed by the outcome name _collect
+# produces -- for the one log line a dry-run message gets, since nothing is
+# written back to show for it.
+_DRY_RUN_WOULD_HAVE = {
+    "completed": "completed and filed the message",
+    "permanent": "filed the message as a permanent error",
+    "transient": "left the message to retry",
+    "abandoned": "timed out and left the message to retry",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +83,7 @@ class _Dispatched:
     slug: str
     graph_id: str
     internet_message_id: str
+    dry_run: bool
 
 
 def build_message(raw: dict, fetch_text: Callable[[], str]) -> Message:
@@ -187,6 +202,7 @@ def run_pass(
         transient_failures=counts["transient_failures"],
         permanent_failures=counts["permanent_failures"],
         abandoned=counts["abandoned"],
+        dry_run=counts["dry_run"],
         expired=counts["expired"],
         dead_lettered=counts["dead_lettered"],
         finished=counts["finished"],
@@ -211,9 +227,15 @@ def _claim_and_dispatch(
     runs, so a wedged handler still spends its attempt -- that's the poison
     guard, and it's why an abandonment later applies the transient writer
     without touching retries-left again.
+
+    A dry-run route skips the claim entirely: the engine writes nothing to a
+    dry-run message, before or after, so there's no attempt to spend and the
+    message is left exactly as it was found. The handler still runs, so it can
+    log what it would have done; it's trusted to make no real changes.
     """
     slug = route.slug
-    _apply(client, {}, graph_id, dispatch.claim(state.retries_left, global_config.max_retries))
+    if not route.dry_run:
+        _apply(client, {}, graph_id, dispatch.claim(state.retries_left, global_config.max_retries))
 
     state_dir = global_config.state_base_dir / slug
     state_dir.mkdir(parents=True, exist_ok=True)
@@ -226,13 +248,15 @@ def _claim_and_dispatch(
 
     job = pool.submit(lambda: handler(message, context))
     deadline = time.monotonic() + global_config.handler_timeout.total_seconds()
-    logger.info("%s dispatched; %s", slug, state.internet_message_id)
+    suffix = " (dry run)" if route.dry_run else ""
+    logger.info("%s dispatched%s; %s", slug, suffix, state.internet_message_id)
     return _Dispatched(
         job=job,
         deadline=deadline,
         slug=slug,
         graph_id=graph_id,
         internet_message_id=state.internet_message_id,
+        dry_run=route.dry_run,
     )
 
 
@@ -290,6 +314,14 @@ def _apply_outcome(
     counts: Counter[str],
 ) -> None:
     slug, gid, imid = item.slug, item.graph_id, item.internet_message_id
+    if item.dry_run:
+        # Dry-run routes are never claimed and never written back: the message
+        # stays put and re-runs next pass. One line reports what a real pass
+        # would have done, since nothing on the message shows for it.
+        would_have = _DRY_RUN_WOULD_HAVE.get(outcome, outcome)
+        logger.info("%s dry run, no changes written; would have %s; %s", slug, would_have, imid)
+        counts["dry_run"] += 1
+        return
     if outcome == "completed":
         _apply(client, folder_ids, gid, dispatch.completed(slug))
         logger.info("✅ %s completed; %s", slug, imid)

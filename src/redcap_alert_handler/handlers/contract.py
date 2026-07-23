@@ -80,14 +80,19 @@ def build_context(global_config: GlobalConfig, route: RouteConfig) -> Context:
     and override it for one route without repeating everything else. Engine
     keys (`mailbox`, `token_cache_path`, `handler_timeout`, and the rest of
     `GlobalConfig`'s own fields) never appear here; only the `extra` tables
-    do, plus `handler` and the resolved `max_age`, which every handler can
-    read regardless of what its route's operator wrote.
+    do, plus `handler`, the resolved `max_age`, and the resolved `dry_run`,
+    which every handler can read regardless of what its route's operator
+    wrote. A handler is expected to honor `dry_run` by doing everything except
+    its outward side effects -- the engine skips the claim and writes nothing
+    back for a dry-run message, so a handler that quietly made changes anyway
+    would defeat the point.
     """
     config: dict[str, object] = {
         **dict(global_config.extra),
         **dict(route.extra),
         "handler": route.handler,
         "max_age": route.max_age,
+        "dry_run": route.dry_run,
     }
     return Context(
         slug=route.slug,

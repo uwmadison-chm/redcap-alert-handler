@@ -37,9 +37,10 @@ _GLOBAL_KNOWN_KEYS = frozenset(
         "retry_backoff",
         "max_age",
         "max_workers",
+        "dry_run",
     }
 )
-_ROUTE_KNOWN_KEYS = frozenset({"handler", "max_age"})
+_ROUTE_KNOWN_KEYS = frozenset({"handler", "max_age", "dry_run"})
 _SECRETS_REQUIRED_KEYS = frozenset({"tenant_id", "client_id", "client_secret"})
 _SECRETS_KNOWN_KEYS = _SECRETS_REQUIRED_KEYS | {"client_secret_expires"}
 
@@ -69,16 +70,18 @@ class GlobalConfig:
     retry_backoff: timedelta
     max_age: timedelta
     max_workers: int
+    dry_run: bool
     extra: Mapping[str, object]
 
 
 @dataclass(frozen=True, slots=True)
 class RouteConfig:
-    """One `[routes.<slug>]` table, with max_age resolved against the global default."""
+    """One `[routes.<slug>]` table, with max_age and dry_run resolved against the global default."""
 
     slug: str
     handler: str
     max_age: timedelta
+    dry_run: bool
     extra: Mapping[str, object]
 
 
@@ -120,7 +123,8 @@ def load_config(path: Path) -> Config:
     problems.extend(global_problems)
 
     fallback_max_age = global_config.max_age if global_config is not None else None
-    routes, route_problems = _parse_routes(data.get("routes"), fallback_max_age)
+    fallback_dry_run = global_config.dry_run if global_config is not None else False
+    routes, route_problems = _parse_routes(data.get("routes"), fallback_max_age, fallback_dry_run)
     problems.extend(route_problems)
 
     if problems:
@@ -213,6 +217,7 @@ def _parse_global(
     state_base_dir = _parse_abs_path(global_raw, "state_base_dir", "global", problems)
     max_retries = _parse_max_retries(global_raw, problems)
     max_workers = _parse_max_workers(global_raw, problems)
+    dry_run = _parse_bool(global_raw, "dry_run", "global", problems, default=False)
 
     durations: dict[str, timedelta | None] = {}
     for key in ("handler_timeout", "retry_backoff", "max_age"):
@@ -229,6 +234,7 @@ def _parse_global(
     assert state_base_dir is not None
     assert max_retries is not None
     assert max_workers is not None
+    assert dry_run is not None
     handler_timeout = durations["handler_timeout"]
     retry_backoff = durations["retry_backoff"]
     max_age = durations["max_age"]
@@ -246,6 +252,7 @@ def _parse_global(
             retry_backoff=retry_backoff,
             max_age=max_age,
             max_workers=max_workers,
+            dry_run=dry_run,
             extra=MappingProxyType(extra),
         ),
         [],
@@ -253,7 +260,7 @@ def _parse_global(
 
 
 def _parse_routes(
-    raw: object, fallback_max_age: timedelta | None
+    raw: object, fallback_max_age: timedelta | None, fallback_dry_run: bool
 ) -> tuple[dict[str, RouteConfig], list[str]]:
     if raw is None or (isinstance(raw, dict) and not raw):
         return {}, ["routes: no routes configured; add at least one [routes.<slug>] section"]
@@ -265,7 +272,7 @@ def _parse_routes(
     routes: dict[str, RouteConfig] = {}
 
     for slug, entry in routes_raw.items():
-        route, route_problems = _parse_route(slug, entry, fallback_max_age)
+        route, route_problems = _parse_route(slug, entry, fallback_max_age, fallback_dry_run)
         problems.extend(route_problems)
         if route is not None:
             routes[slug] = route
@@ -274,7 +281,7 @@ def _parse_routes(
 
 
 def _parse_route(
-    slug: str, entry: object, fallback_max_age: timedelta | None
+    slug: str, entry: object, fallback_max_age: timedelta | None, fallback_dry_run: bool
 ) -> tuple[RouteConfig | None, list[str]]:
     problems: list[str] = []
 
@@ -306,6 +313,15 @@ def _parse_route(
     if "max_age" in entry_raw:
         max_age = _parse_duration(entry_raw, "max_age", f"routes.{slug}", problems)
 
+    # Inherit the global default; a per-route dry_run flips it either way, so a
+    # dry-run instance can exempt one live route and a live instance can dry-run
+    # just one.
+    dry_run = fallback_dry_run
+    if "dry_run" in entry_raw:
+        dry_run = _parse_bool(
+            entry_raw, "dry_run", f"routes.{slug}", problems, default=fallback_dry_run
+        )
+
     if problems:
         return None, problems
 
@@ -317,9 +333,16 @@ def _parse_route(
         return None, []
 
     assert isinstance(handler, str)
+    assert dry_run is not None
     extra = {k: v for k, v in entry_raw.items() if k not in _ROUTE_KNOWN_KEYS}
     return (
-        RouteConfig(slug=slug, handler=handler, max_age=max_age, extra=MappingProxyType(extra)),
+        RouteConfig(
+            slug=slug,
+            handler=handler,
+            max_age=max_age,
+            dry_run=dry_run,
+            extra=MappingProxyType(extra),
+        ),
         [],
     )
 
@@ -413,6 +436,18 @@ def _parse_max_workers(raw: dict[str, object], problems: list[str]) -> int | Non
         return None
     if value < 1:
         problems.append(f"global.{key}: must be at least 1; a pool needs a worker")
+        return None
+    return value
+
+
+def _parse_bool(
+    raw: dict[str, object], key: str, section: str, problems: list[str], *, default: bool
+) -> bool | None:
+    if key not in raw:
+        return default
+    value = raw[key]
+    if not isinstance(value, bool):
+        problems.append(f"{section}.{key}: must be true or false, not {value!r}")
         return None
     return value
 

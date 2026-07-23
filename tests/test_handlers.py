@@ -81,10 +81,13 @@ def _config(routes: dict[str, str]) -> Config:
         retry_backoff=timedelta(minutes=5),
         max_age=timedelta(days=1),
         max_workers=4,
+        dry_run=False,
         extra=MappingProxyType({}),
     )
     route_configs = {
-        slug: RouteConfig(slug=slug, handler=handler, max_age=timedelta(days=1), extra={})
+        slug: RouteConfig(
+            slug=slug, handler=handler, max_age=timedelta(days=1), dry_run=False, extra={}
+        )
         for slug, handler in routes.items()
     }
     return Config(global_config=global_config, routes=route_configs)

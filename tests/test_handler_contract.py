@@ -97,6 +97,7 @@ def _global_config(**overrides):
         "retry_backoff": timedelta(minutes=5),
         "max_age": timedelta(days=1),
         "max_workers": 4,
+        "dry_run": False,
         "extra": MappingProxyType({}),
     }
     fields.update(overrides)
@@ -108,6 +109,7 @@ def _route_config(**overrides):
         "slug": "simple",
         "handler": "redcap-alert-handler:log_message",
         "max_age": timedelta(days=1),
+        "dry_run": False,
         "extra": MappingProxyType({}),
     }
     fields.update(overrides)
@@ -140,6 +142,16 @@ def test_build_context_config_carries_handler_and_resolved_max_age():
 
     assert context.config["handler"] == "redcap-alert-handler:log_message"
     assert context.config["max_age"] == timedelta(hours=3)
+
+
+@pytest.mark.parametrize("dry_run", [True, False])
+def test_build_context_config_carries_resolved_dry_run(dry_run):
+    global_config = _global_config()
+    route = _route_config(dry_run=dry_run)
+
+    context = build_context(global_config, route)
+
+    assert context.config["dry_run"] is dry_run
 
 
 def test_build_context_global_extra_flows_into_config():

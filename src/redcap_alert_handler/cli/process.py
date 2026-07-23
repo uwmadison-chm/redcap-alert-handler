@@ -274,6 +274,7 @@ def _log_summary(stats: PassStats) -> None:
         "transient_failures",
         "permanent_failures",
         "abandoned",
+        "dry_run",
         "expired",
         "dead_lettered",
         "finished",

@@ -27,6 +27,8 @@ def test_load_good_minimal_config():
     assert config.global_config.max_age == timedelta(days=1)
     # not set in the fixture: the worker pool defaults to 4
     assert config.global_config.max_workers == 4
+    # not set in the fixture: dry_run is off by default
+    assert config.global_config.dry_run is False
     assert config.global_config.extra == {}
 
     assert set(config.routes) == {"simple"}
@@ -34,6 +36,7 @@ def test_load_good_minimal_config():
     assert route.slug == "simple"
     assert route.handler == "redcap-alert-handler:log_message"
     assert route.max_age == timedelta(days=1)
+    assert route.dry_run is False
     assert route.extra == {}
 
 
@@ -56,6 +59,16 @@ def test_load_good_full_config():
     # no override: falls back to global max_age
     assert push_alert.max_age == timedelta(days=1)
     assert push_alert.extra == {"model": "group-assign-v3"}
+
+
+def test_dry_run_resolves_from_global_with_per_route_override():
+    config = load_config(CONFIGS / "good_dry_run.toml")
+
+    assert config.global_config.dry_run is True
+    # no override: inherits the global default
+    assert config.routes["inherits"].dry_run is True
+    # explicit override wins, so one route can stay live in a dry-run instance
+    assert config.routes["goes_live"].dry_run is False
 
 
 BAD_CONFIGS = [
@@ -92,6 +105,7 @@ BAD_CONFIGS = [
         ["global.token_cache_path", "global.max_retries", "routes.bad-slug"],
     ),
     ("bad_missing_global_section.toml", ["global"]),
+    ("bad_dry_run.toml", ["global.dry_run", "routes.simple.dry_run"]),
 ]
 
 

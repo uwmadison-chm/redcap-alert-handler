@@ -55,6 +55,7 @@ def make_config(
     retry_backoff: timedelta = timedelta(hours=1),
     max_age: timedelta = timedelta(days=30),
     slug: str = "consent",
+    dry_run: bool = False,
 ) -> Config:
     """A Config with one route, timings the test can pin down."""
     global_config = GlobalConfig(
@@ -67,12 +68,14 @@ def make_config(
         retry_backoff=retry_backoff,
         max_age=max_age,
         max_workers=2,
+        dry_run=dry_run,
         extra=MappingProxyType({}),
     )
     route = RouteConfig(
         slug=slug,
         handler="test-handlers:consent",
         max_age=max_age,
+        dry_run=dry_run,
         extra=MappingProxyType({}),
     )
     return Config(global_config=global_config, routes={slug: route})
@@ -467,6 +470,74 @@ def test_stop_preset_skips_everything(fake_graph, graph_client, pool, tmp_path):
     # Untouched: still in the base folder with no state written.
     resting = one_in(fake_graph, base_id)
     assert prop(resting, dispatch.PROP_STATE) is None
+
+
+def test_dry_run_route_runs_handler_but_writes_nothing(fake_graph, graph_client, pool, tmp_path):
+    config = make_config(tmp_path / "state", dry_run=True)
+    base_id, folder_ids = setup_mailbox(graph_client, fake_graph)
+    fake_graph.add_message(base_id)
+
+    seen = []
+    handlers = {"consent": lambda m, c: seen.append((m, c))}
+    clock = Clock(datetime(2026, 7, 9, 14, 0, tzinfo=UTC))
+
+    stats = run_pass(
+        graph_client,
+        config,
+        handlers,
+        base_id,
+        folder_ids,
+        pool,
+        now=clock,
+        stop=threading.Event(),
+    )
+
+    # The handler ran and saw dry_run in its context...
+    assert stats.dispatched == 1
+    assert stats.dry_run == 1
+    assert stats.completed == 0
+    assert len(seen) == 1
+    assert seen[0][1].config["dry_run"] is True
+
+    # ...but the message is untouched: still in the base folder, no claim, no
+    # terminal state, and rah issued no PATCH at all.
+    resting = one_in(fake_graph, base_id)
+    assert prop(resting, dispatch.PROP_RETRIES_LEFT) is None
+    assert prop(resting, dispatch.PROP_STATE) is None
+    assert resting["categories"] == []
+    assert not any(method == "PATCH" for method, _ in fake_graph.requests)
+
+
+def test_dry_run_leaves_message_put_even_when_handler_errors(
+    fake_graph, graph_client, pool, tmp_path
+):
+    config = make_config(tmp_path / "state", dry_run=True)
+    base_id, folder_ids = setup_mailbox(graph_client, fake_graph)
+    fake_graph.add_message(base_id)
+
+    def handler(m, c):
+        raise PermanentError("would never parse")
+
+    handlers = {"consent": handler}
+    clock = Clock(datetime(2026, 7, 9, 14, 0, tzinfo=UTC))
+
+    stats = run_pass(
+        graph_client,
+        config,
+        handlers,
+        base_id,
+        folder_ids,
+        pool,
+        now=clock,
+        stop=threading.Event(),
+    )
+
+    # A dry-run route swallows the would-be permanent failure: nothing moves.
+    assert stats.dry_run == 1
+    assert stats.permanent_failures == 0
+    resting = one_in(fake_graph, base_id)
+    assert prop(resting, dispatch.PROP_STATE) is None
+    assert not in_folder(fake_graph, folder_ids["consent/error"])
 
 
 # -- build_message unit coverage -------------------------------------------
