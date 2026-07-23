@@ -1,5 +1,6 @@
 # Example project, different repo
 rah-example-randomizer/
+rah-sha256-hasher/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
