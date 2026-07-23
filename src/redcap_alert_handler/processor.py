@@ -272,36 +272,41 @@ def _collect(
     """Wait on each dispatched handler in submission order and apply its outcome."""
     for item in running:
         remaining = max(0.0, item.deadline - time.monotonic())
+        reason: str | None = None
         try:
             item.job.future.result(timeout=remaining)
             outcome = "completed"
         except TimeoutError:
             # abandon() is False when the job finished just under the wire; the
             # real result is on the future, so read it instead of retrying.
-            outcome = "abandoned" if pool.abandon(item.job) else _settled_outcome(item.job)
-        except PermanentError:
-            outcome = "permanent"
-        except TransientError:
-            outcome = "transient"
-        except Exception:
+            if pool.abandon(item.job):
+                outcome = "abandoned"
+            else:
+                outcome, reason = _settled_outcome(item.job)
+        except PermanentError as e:
+            outcome, reason = "permanent", str(e)
+        except TransientError as e:
+            outcome, reason = "transient", str(e)
+        except Exception as e:
             # Anything the handler didn't label is treated as transient; the
             # attempt counter, not the exception type, is what stops a loop.
-            outcome = "transient"
+            # Keep the type name -- an unlabeled error's str is often empty.
+            outcome, reason = "transient", f"{type(e).__name__}: {e}"
 
-        _apply_outcome(client, folder_ids, retry_backoff, now, item, outcome, counts)
+        _apply_outcome(client, folder_ids, retry_backoff, now, item, outcome, reason, counts)
 
 
-def _settled_outcome(job: Job) -> str:
-    """The outcome name for a future that's already settled (won't block)."""
+def _settled_outcome(job: Job) -> tuple[str, str | None]:
+    """The (outcome, reason) for a future that's already settled (won't block)."""
     try:
         job.future.result(timeout=0)
-        return "completed"
-    except PermanentError:
-        return "permanent"
-    except TransientError:
-        return "transient"
-    except Exception:
-        return "transient"
+        return "completed", None
+    except PermanentError as e:
+        return "permanent", str(e)
+    except TransientError as e:
+        return "transient", str(e)
+    except Exception as e:
+        return "transient", f"{type(e).__name__}: {e}"
 
 
 def _apply_outcome(
@@ -311,15 +316,21 @@ def _apply_outcome(
     now: Callable[[], datetime],
     item: _Dispatched,
     outcome: str,
+    reason: str | None,
     counts: Counter[str],
 ) -> None:
     slug, gid, imid = item.slug, item.graph_id, item.internet_message_id
+    # The handler's own words for why it failed, ready to splice into a line.
+    # Empty for a clean or timed-out run, which have nothing to explain.
+    detail = f": {reason}" if reason else ""
     if item.dry_run:
         # Dry-run routes are never claimed and never written back: the message
         # stays put and re-runs next pass. One line reports what a real pass
         # would have done, since nothing on the message shows for it.
         would_have = _DRY_RUN_WOULD_HAVE.get(outcome, outcome)
-        logger.info("%s dry run, no changes written; would have %s; %s", slug, would_have, imid)
+        logger.info(
+            "%s dry run, no changes written; would have %s%s; %s", slug, would_have, detail, imid
+        )
         counts["dry_run"] += 1
         return
     if outcome == "completed":
@@ -328,7 +339,7 @@ def _apply_outcome(
         counts["completed"] += 1
     elif outcome == "permanent":
         _apply(client, folder_ids, gid, dispatch.permanent_failure(slug))
-        logger.info("❌ %s permanent failure; %s", slug, imid)
+        logger.info("❌ %s permanent failure%s; %s", slug, detail, imid)
         counts["permanent_failures"] += 1
     elif outcome == "abandoned":
         _apply(client, folder_ids, gid, dispatch.transient_failure(now(), retry_backoff))
@@ -336,7 +347,7 @@ def _apply_outcome(
         counts["abandoned"] += 1
     else:  # transient
         _apply(client, folder_ids, gid, dispatch.transient_failure(now(), retry_backoff))
-        logger.info("❌ %s transient failure, will retry; %s", slug, imid)
+        logger.info("❌ %s transient failure, will retry%s; %s", slug, detail, imid)
         counts["transient_failures"] += 1
 
 
