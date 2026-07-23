@@ -157,6 +157,40 @@ def test_happy_path_routes_to_completed(fake_graph, graph_client, pool, tmp_path
     assert prop(landed, dispatch.PROP_RETRIES_LEFT) == "3"
 
 
+def test_completes_in_one_pass_when_change_keys_rotate(fake_graph, graph_client, pool, tmp_path):
+    # Regression for the change-key conflict: the claim patch rotates the
+    # message's change key before the handler runs, so the id captured at list
+    # time would be stale for the completion patch. With strict change keys on,
+    # this reproduces the failure -- and passes only because rah asks for
+    # immutable ids, which don't rotate. Drop that request and the completion
+    # patch would 409, the message would land back in the base folder, and the
+    # single-pass assertions below would fail.
+    fake_graph.strict_change_keys = True
+    config = make_config(tmp_path / "state")
+    base_id, folder_ids = setup_mailbox(graph_client, fake_graph)
+    fake_graph.add_message(base_id)
+
+    handlers = {"consent": lambda m, c: None}
+    clock = Clock(datetime(2026, 7, 9, 14, 0, tzinfo=UTC))
+
+    stats = run_pass(
+        graph_client,
+        config,
+        handlers,
+        base_id,
+        folder_ids,
+        pool,
+        now=clock,
+        stop=threading.Event(),
+    )
+
+    assert stats.dispatched == 1
+    assert stats.completed == 1
+    assert in_folder(fake_graph, base_id) == []  # nothing left behind to re-dispatch
+    landed = one_in(fake_graph, folder_ids["consent/completed"])
+    assert prop(landed, dispatch.PROP_STATE) == "completed"
+
+
 def test_html_body_fetches_text_rendering(fake_graph, graph_client, pool, tmp_path):
     config = make_config(tmp_path / "state")
     base_id, folder_ids = setup_mailbox(graph_client, fake_graph)

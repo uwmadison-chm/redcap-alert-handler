@@ -30,6 +30,14 @@ logger = get_logger(__name__)
 
 GRAPH_ROOT = "https://graph.microsoft.com/v1.0"
 
+# Ask Graph for immutable ids on every request. By default an Outlook item's id
+# encodes its change key, so any write rotates the id -- and a message id we
+# captured at list time goes stale the moment the claim patch modifies it, which
+# breaks the later completion patch with an ErrorIrresolvableConflict. Immutable
+# ids stay put across edits and folder moves, so one captured id stays usable for
+# the whole dispatch. See learn.microsoft.com/graph/outlook-immutable-id.
+_IMMUTABLE_ID_PREFER = 'IdType="ImmutableId"'
+
 # How long to wait before a retry when Graph doesn't tell us (no Retry-After,
 # or one we can't read as an integer). Deliberately short; the caps below stop
 # a wedged endpoint from spinning forever.
@@ -206,8 +214,17 @@ class GraphClient:
         extra_headers: Mapping[str, str] | None = None,
     ) -> dict:
         headers = {"Authorization": f"Bearer {self._get_token()}"}
+        # Immutable ids ride on Prefer, the same header get_message uses for the
+        # body format; both values go in one comma-joined Prefer, so neither
+        # clobbers the other.
+        prefer = [_IMMUTABLE_ID_PREFER]
         if extra_headers:
-            headers.update(extra_headers)
+            for key, value in extra_headers.items():
+                if key.casefold() == "prefer":
+                    prefer.append(value)
+                else:
+                    headers[key] = value
+        headers["Prefer"] = ", ".join(prefer)
         for attempt in range(1, self._max_attempts + 1):
             try:
                 response = self._client.request(

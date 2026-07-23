@@ -72,6 +72,85 @@ def test_list_messages_omits_properties_without_expand(fake_graph, graph_client)
     assert "singleValueExtendedProperties" not in messages[0]
 
 
+# --- immutable ids ---
+
+
+def test_list_messages_requests_immutable_ids(fake_graph, graph_client):
+    # The id captured here gets reused for the claim and completion patches, so
+    # it has to be one that survives an edit -- the immutable kind.
+    fake_graph.add_message(fake_graph.inbox_id, subject="hi")
+
+    graph_client.list_messages(fake_graph.inbox_id)
+
+    assert 'IdType="ImmutableId"' in fake_graph.request_headers[-1]["Prefer"]
+
+
+def test_get_message_requests_immutable_ids(fake_graph, graph_client):
+    added = fake_graph.add_message(fake_graph.inbox_id, subject="hi")
+
+    graph_client.get_message(added["id"])
+
+    assert 'IdType="ImmutableId"' in fake_graph.request_headers[-1]["Prefer"]
+
+
+# --- change-key staleness (fake fidelity) ---
+#
+# These drive the fake directly, without a GraphClient, so a request can choose
+# whether to ask for immutable ids -- the whole point being to prove the fake
+# rotates a change key on write and that immutable ids dodge it.
+
+
+def _raw_client(fake_graph) -> httpx.Client:
+    return httpx.Client(
+        transport=fake_graph.transport(),
+        base_url=f"https://graph.microsoft.com/v1.0/users/{fake_graph.mailbox}/",
+    )
+
+
+def test_strict_change_keys_make_a_captured_id_stale_for_the_next_write(fake_graph):
+    fake_graph.strict_change_keys = True
+    added = fake_graph.add_message(fake_graph.inbox_id, subject="hi")
+
+    with _raw_client(fake_graph) as client:
+        # A plain list (no immutable-id Prefer) hands back a change-key-tagged id.
+        listed = client.get(f"mailFolders/{fake_graph.inbox_id}/messages").json()
+        captured_id = listed["value"][0]["id"]
+        assert captured_id != added["id"]
+
+        # The first write lands and rotates the change key.
+        first = client.patch(f"messages/{captured_id}", json={"categories": ["rah:processing"]})
+        assert first.status_code == 200
+
+        # The captured id is now stale: the next write conflicts, the way the
+        # completion patch did in the field.
+        stale = client.patch(f"messages/{captured_id}", json={"categories": ["rah:errored"]})
+        assert stale.status_code == 409
+        assert stale.json()["error"]["code"] == "ErrorIrresolvableConflict"
+
+        # A read through the stale id still works -- reads tolerate a mismatch.
+        assert client.get(f"messages/{captured_id}").status_code == 200
+
+
+def test_strict_change_keys_leave_an_immutable_id_usable_across_writes(fake_graph):
+    fake_graph.strict_change_keys = True
+    fake_graph.add_message(fake_graph.inbox_id, subject="hi")
+    headers = {"Prefer": 'IdType="ImmutableId"'}
+
+    with _raw_client(fake_graph) as client:
+        listed = client.get(f"mailFolders/{fake_graph.inbox_id}/messages", headers=headers).json()
+        immutable_id = listed["value"][0]["id"]
+
+        first = client.patch(
+            f"messages/{immutable_id}", json={"categories": ["rah:processing"]}, headers=headers
+        )
+        second = client.patch(
+            f"messages/{immutable_id}", json={"categories": ["rah:errored"]}, headers=headers
+        )
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+
+
 # --- getting one message ---
 
 
@@ -123,7 +202,11 @@ def test_get_message_body_format_sends_the_prefer_header(fake_graph, graph_clien
 
     graph_client.get_message(added["id"], body_format="text")
 
-    assert fake_graph.request_headers[-1]["Prefer"] == 'outlook.body-content-type="text"'
+    # The body-format Prefer shares the header with the always-on immutable-id
+    # Prefer; both values are present, comma-joined.
+    prefer = fake_graph.request_headers[-1]["Prefer"]
+    assert 'outlook.body-content-type="text"' in prefer
+    assert 'IdType="ImmutableId"' in prefer
 
 
 def test_get_message_body_format_text_leaves_a_text_native_body_unchanged(fake_graph, graph_client):
