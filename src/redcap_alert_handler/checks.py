@@ -6,7 +6,7 @@
 
 An ordered set of checks -- config, routes, handlers, checkups, secrets, token
 cache, graph, folders, categories -- each returning pass/fail/skipped plus
-messages. `doctor` reports them; `init` (and `doctor --fix`) runs the same list
+messages. `doctor` reports them and changes nothing; `init` runs the same list
 with `fix` on, creating the mailbox folders and categories the checks look for;
 `process` runs it at startup so a broken config shouts before the first pass
 instead of one message at a time. One list, so a check can never mean one thing

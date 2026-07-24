@@ -7,9 +7,9 @@
 The checks themselves live in `checks`, where `rah process` can run the same
 list at startup. What's here is the command around them: the flags, the
 verbose config dump, the machine-readable and file copies of the report, and
-the exit code. `init` is `doctor --fix` under a friendlier name -- same core,
-so a check can never mean one thing to one command and something else to the
-other.
+the exit code. Both commands run the same core, so a check can never mean one
+thing to one command and something else to the other; `init` is the one that
+creates what's missing, and `doctor` only ever reports.
 """
 
 from __future__ import annotations
@@ -35,11 +35,6 @@ from redcap_alert_handler.logs import get_logger
 
 logger = get_logger(__name__)
 
-FixOption = Annotated[
-    bool,
-    typer.Option("--fix", help="Create missing mailbox folders and categories."),
-]
-
 JsonOption = Annotated[
     bool,
     typer.Option("--json", help="Write a machine-readable report to stdout."),
@@ -54,7 +49,6 @@ OutputOption = Annotated[
 def doctor(
     config: ConfigOption,
     secrets: SecretsOption = None,
-    fix: FixOption = False,
     json_output: JsonOption = False,
     output: OutputOption = None,
     verbose: VerboseOption = False,
@@ -63,13 +57,13 @@ def doctor(
 ) -> None:
     """Check the config, the secrets if given, the token cache, and the mailbox.
 
-    Runs the full check list and reports each result. Graph-side checks only
-    run when config, secrets, and a fresh token are all in hand; otherwise
-    they're skipped rather than failed. With --fix, missing mailbox folders
-    and categories are created. Exits 0 if every check that ran passed, 1 if
-    any failed.
+    Runs the full check list and reports each result, changing nothing.
+    Graph-side checks only run when config, secrets, and a fresh token are all
+    in hand; otherwise they're skipped rather than failed. Missing folders and
+    categories are reported, and `rah init` is what creates them. Exits 0 if
+    every check that ran passed, 1 if any failed.
     """
-    _run_doctor(config, secrets, fix, json_output, output, verbose, quiet, no_color)
+    _run_doctor(config, secrets, False, json_output, output, verbose, quiet, no_color)
 
 
 def init(
@@ -83,9 +77,9 @@ def init(
 ) -> None:
     """Provision the mailbox: create the rah folders and categories it needs.
 
-    The documented first-run step after `rah auth`. This is `doctor --fix`
-    under a friendlier name -- it runs the same checks and creates whatever's
-    missing.
+    The documented first-run step after `rah auth`. It runs the same checks
+    `doctor` does and creates whatever's missing, so running it against an
+    already-provisioned mailbox is a no-op with a report.
     """
     _run_doctor(config, secrets, True, json_output, output, verbose, quiet, no_color)
 

@@ -745,24 +745,17 @@ def test_graph_skipped_without_a_refreshed_token(write_config, cache_with_accoun
     assert "categories not checked" in result.output
 
 
-def test_fix_creates_a_missing_named_base_folder(
+def test_init_creates_a_missing_named_base_folder(
     write_config, cache_with_account, fake_app, install_fake_msal, install_fake_graph
 ):
     config = write_config(cache_with_account, base="good_full.toml")
     install_fake_msal(fake_app(accounts=ACCOUNTS, silent_result=REFRESHED))
-    # No "rah" folder exists yet; --fix should create it and carry on.
+    # No "rah" folder exists yet; init should create it and carry on.
     install_fake_graph()
 
     result = runner.invoke(
         app,
-        [
-            "doctor",
-            "--fix",
-            "--config",
-            str(config),
-            "--secrets",
-            str(SECRETS / "good.toml"),
-        ],
+        ["init", "--config", str(config), "--secrets", str(SECRETS / "good.toml")],
         env=CLEAN_ENV,
     )
     assert result.exit_code == 0
@@ -821,10 +814,10 @@ def test_missing_categories_fails_and_points_at_rah_init(
     )
 
 
-# --- --fix and `rah init` ---
+# --- `rah init` ---
 
 
-def test_fix_provisions_missing_layout_and_categories(
+def test_init_provisions_missing_layout_and_categories(
     write_config, cache_with_account, fake_app, install_fake_msal, install_fake_graph
 ):
     from redcap_alert_handler.mailbox import RAH_CATEGORIES, required_folder_paths
@@ -836,14 +829,7 @@ def test_fix_provisions_missing_layout_and_categories(
 
     result = runner.invoke(
         app,
-        [
-            "doctor",
-            "--fix",
-            "--config",
-            str(config),
-            "--secrets",
-            str(SECRETS / "good.toml"),
-        ],
+        ["init", "--config", str(config), "--secrets", str(SECRETS / "good.toml")],
         env=CLEAN_ENV,
     )
     assert result.exit_code == 0
@@ -856,14 +842,7 @@ def test_fix_provisions_missing_layout_and_categories(
     # second round of creation.
     second = runner.invoke(
         app,
-        [
-            "doctor",
-            "--fix",
-            "--config",
-            str(config),
-            "--secrets",
-            str(SECRETS / "good.toml"),
-        ],
+        ["init", "--config", str(config), "--secrets", str(SECRETS / "good.toml")],
         env=CLEAN_ENV,
     )
     assert second.exit_code == 0
@@ -873,22 +852,31 @@ def test_fix_provisions_missing_layout_and_categories(
     assert "categories okay: created" not in second.output
 
 
-def test_init_behaves_like_doctor_fix(
+def test_doctor_creates_nothing(
     write_config, cache_with_account, fake_app, install_fake_msal, install_fake_graph
 ):
+    # Provisioning belongs to init alone: doctor reports the same missing
+    # folders and categories every time you run it, and leaves the mailbox be.
     config = write_config(cache_with_account, base="good_full.toml")
     install_fake_msal(fake_app(accounts=ACCOUNTS, silent_result=REFRESHED))
     fake = install_fake_graph()
-    fake.add_folder("rah", parent_id=fake.root_id)
+    rah = fake.add_folder("rah", parent_id=fake.root_id)
 
     result = runner.invoke(
         app,
-        ["init", "--config", str(config), "--secrets", str(SECRETS / "good.toml")],
+        ["doctor", "--config", str(config), "--secrets", str(SECRETS / "good.toml")],
         env=CLEAN_ENV,
     )
-    assert result.exit_code == 0
-    assert "✅ folders okay: created" in result.output
-    assert "✅ categories okay: created" in result.output
+    assert result.exit_code == 1
+    assert "❌ folders:" in result.output
+    assert not [f for f in fake.folders.values() if f["parentFolderId"] == rah["id"]]
+    assert not fake.categories
+
+
+def test_doctor_has_no_fix_flag(write_config, cache_with_account):
+    config = write_config(cache_with_account)
+    result = runner.invoke(app, ["doctor", "--fix", "--config", str(config)], env=CLEAN_ENV)
+    assert result.exit_code == 2
 
 
 # --- --json ---

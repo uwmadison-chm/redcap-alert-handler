@@ -133,8 +133,7 @@ The one thin wrapper (`msal` + `httpx`) everything else calls. Small, boring, he
 ## 4. `rah doctor`
 
 * Checks, in order, reporting each: config parses; routes valid; every configured handler resolves to an installed entry point; secrets file readable; token cache present and refreshable; mailbox folders (`{slug}/completed`, `{slug}/error`, `dead-letters`) exist; `rah:*` categories seeded. (Graph reachability is already covered by step 3's check.)
-* `--fix` idempotently provisions missing folders and categories (the answer to "who creates the folder layout": doctor, on demand -- not `watch` at startup).
-* `rah init` -- an alias for `rah doctor --fix`, because "run `rah init`" documents better than a repair flag. Same code path; the alias is the documented first-run step after `rah auth`. Once it exists, point the Graph check's missing-folder advice at it.
+* `rah init` idempotently provisions missing folders and categories (the answer to "who creates the folder layout": init, on demand -- not `watch` at startup), and the Graph check's missing-folder advice points at it. Originally `rah doctor --fix`, with `init` as an alias; the flag was cut 2026-07-24, since two spellings of a mutating action is one too many and "run `rah init`" is what the docs say anyway. `doctor` now only ever reports, which also makes it safe to point a monitoring probe at.
 * Human-readable output; `--json` for machines; exit 0 only if all checks pass, so it can back a cron or monitoring probe.
 * `-o`, `--output` to write to a file instead of stdout
 
