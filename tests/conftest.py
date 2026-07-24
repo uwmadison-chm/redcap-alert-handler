@@ -168,21 +168,23 @@ def graph_client(fake_graph, sleep_spy):
 
 @pytest.fixture
 def install_fake_graph(monkeypatch):
-    """Patch a CLI module's GraphClient so it runs against a fake mailbox.
+    """Patch GraphClient so a command runs against a fake mailbox.
 
     Same idea as install_fake_msal: swap the name the command constructs so
-    nothing reaches the network. Defaults to the doctor module; pass
-    `module=` to patch another command's GraphClient (process uses this).
-    Pass a FakeGraph to seed state, or take the default.
+    nothing reaches the network. The checks module is always patched, since
+    every command runs the check list; pass `module=` to patch a command that
+    also builds a client of its own (process does). One fake serves both, so
+    the checks and the pass see the same mailbox. Pass a FakeGraph to seed
+    state, or take the default.
     """
 
     def install(fake=None, module=None):
         from fake_graph import FakeGraph
 
+        import redcap_alert_handler.checks as checks_mod
         from redcap_alert_handler.graph import GraphClient
 
-        if module is None:
-            import redcap_alert_handler.cli.doctor as module
+        modules = [checks_mod] if module is None else [checks_mod, module]
 
         fake = fake if fake is not None else FakeGraph()
 
@@ -194,7 +196,8 @@ def install_fake_graph(monkeypatch):
                 sleep=lambda seconds: None,
             )
 
-        monkeypatch.setattr(module, "GraphClient", factory)
+        for target in modules:
+            monkeypatch.setattr(target, "GraphClient", factory)
         return fake
 
     return install

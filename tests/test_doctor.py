@@ -121,6 +121,7 @@ def test_routes_and_handlers_skipped_when_config_fails_to_load():
     assert result.exit_code == 1
     assert "routes not checked: the config didn't load" in result.output
     assert "handlers not checked: the config didn't load" in result.output
+    assert "checkups not checked: the config didn't load" in result.output
     assert "❌ routes:" not in result.output
     assert "❌ handlers:" not in result.output
 
@@ -369,6 +370,151 @@ def test_unqualified_handler_fails_the_routes_check_not_the_handlers_check(
     assert result.exit_code == 1
     assert "❌ routes:" in result.output
     assert "handlers not checked: the config didn't load" in result.output
+
+
+# --- the checkups check ---
+
+
+def _handler(checkup=None):
+    """A handler that refuses to be dispatched, optionally carrying a checkup."""
+
+    def handle(message, context):
+        raise AssertionError("doctor should never dispatch a message")
+
+    if checkup is not None:
+        # Same ignore a real handler package needs: attaching an attribute to
+        # a function is fine at runtime, invisible to the type checker.
+        handle.checkup = checkup  # ty: ignore[unresolved-attribute]
+    return handle
+
+
+def _install_handlers(monkeypatch, handlers):
+    """Hand the checks a fixed slug -> handler map.
+
+    Real entry-point resolution is covered above; what these tests need is a
+    handler with a checkup attached, which no installed package has.
+    """
+    import redcap_alert_handler.checks as checks_mod
+
+    monkeypatch.setattr(checks_mod, "load_handlers", lambda config: dict(handlers))
+
+
+def test_a_handler_without_a_checkup_is_not_a_problem(write_config, cache_with_account):
+    # log_message, the real registered handler, has no checkup -- and that's
+    # an ordinary state of affairs, not something to fail over.
+    config = write_config(cache_with_account)
+    result = runner.invoke(app, ["doctor", "--config", str(config)], env=CLEAN_ENV)
+    assert result.exit_code == 0
+    assert "✅ checkups okay: no route's handler offers one" in result.output
+
+
+def test_a_happy_checkup_passes(write_config, cache_with_account, monkeypatch):
+    _install_handlers(monkeypatch, {"simple": _handler(lambda context: [])})
+    config = write_config(cache_with_account)
+    result = runner.invoke(app, ["doctor", "--config", str(config)], env=CLEAN_ENV)
+    assert result.exit_code == 0
+    assert "✅ checkups okay: 1 route checked" in result.output
+
+
+def test_checkup_problems_fail_the_run_with_the_route_named(
+    write_config, cache_with_account, monkeypatch
+):
+    _install_handlers(
+        monkeypatch,
+        {"simple": _handler(lambda context: ["model_file points at nothing", "no input_fields"])},
+    )
+    config = write_config(cache_with_account)
+    result = runner.invoke(app, ["doctor", "--config", str(config)], env=CLEAN_ENV)
+    assert result.exit_code == 1
+    lines = [line for line in result.output.splitlines() if "❌ checkups:" in line]
+    assert len(lines) == 2
+    assert all("routes.simple" in line for line in lines)
+    assert any("model_file points at nothing" in line for line in lines)
+
+
+def test_a_checkup_sees_its_route_context(write_config, cache_with_account, monkeypatch):
+    seen = {}
+
+    def checkup(context):
+        seen[context.slug] = context
+        return []
+
+    _install_handlers(monkeypatch, {"consent": _handler(checkup), "push_alert": _handler(checkup)})
+    config = write_config(cache_with_account, base="good_full.toml")
+    result = runner.invoke(app, ["doctor", "--config", str(config)], env=CLEAN_ENV)
+    assert result.exit_code == 0
+
+    # The same Context a message would arrive with: the route's own extras,
+    # the resolved max_age, and the route's state dir.
+    assert set(seen) == {"consent", "push_alert"}
+    consent = seen["consent"]
+    assert consent.config["template"] == "consent_v2"
+    assert consent.config["handler"] == "redcap-alert-handler:log_message"
+    assert consent.config["max_age"] == timedelta(hours=3)
+    assert consent.state_dir.name == "consent"
+
+
+def test_only_some_routes_offering_a_checkup_says_which(
+    write_config, cache_with_account, monkeypatch
+):
+    _install_handlers(
+        monkeypatch, {"consent": _handler(lambda context: []), "push_alert": _handler()}
+    )
+    config = write_config(cache_with_account, base="good_full.toml")
+    result = runner.invoke(app, ["doctor", "--config", str(config)], env=CLEAN_ENV)
+    assert result.exit_code == 0
+    assert "✅ checkups okay: 1 of 2 routes checked; no checkup for push_alert" in result.output
+
+
+def test_a_raising_checkup_is_reported_and_the_rest_still_run(
+    write_config, cache_with_account, monkeypatch
+):
+    def boom(context):
+        raise RuntimeError("joblib exploded")
+
+    _install_handlers(monkeypatch, {"consent": _handler(boom), "push_alert": _handler()})
+    config = write_config(cache_with_account, base="good_full.toml")
+    result = runner.invoke(app, ["doctor", "--config", str(config)], env=CLEAN_ENV)
+    assert result.exit_code == 1
+    assert "❌ checkups: routes.consent: checkup raised RuntimeError: joblib exploded" in (
+        result.output
+    )
+    # A handler package's bad day doesn't take the rest of the report with it.
+    assert "✅ token cache okay" in result.output
+
+
+def test_a_checkup_that_returns_nonsense_is_reported(write_config, cache_with_account, monkeypatch):
+    _install_handlers(monkeypatch, {"simple": _handler(lambda context: 17)})
+    config = write_config(cache_with_account)
+    result = runner.invoke(app, ["doctor", "--config", str(config)], env=CLEAN_ENV)
+    assert result.exit_code == 1
+    assert "checkup returned int, expected a list of problems" in result.output
+
+
+def test_a_checkup_that_is_not_callable_is_reported(write_config, cache_with_account, monkeypatch):
+    _install_handlers(monkeypatch, {"simple": _handler("not a function")})
+    config = write_config(cache_with_account)
+    result = runner.invoke(app, ["doctor", "--config", str(config)], env=CLEAN_ENV)
+    assert result.exit_code == 1
+    assert "❌ checkups: routes.simple: the handler's checkup isn't callable" in result.output
+
+
+def test_a_bare_string_from_a_checkup_counts_as_one_problem(
+    write_config, cache_with_account, monkeypatch
+):
+    _install_handlers(monkeypatch, {"simple": _handler(lambda context: "everything is wrong")})
+    config = write_config(cache_with_account)
+    result = runner.invoke(app, ["doctor", "--config", str(config)], env=CLEAN_ENV)
+    assert result.exit_code == 1
+    assert "❌ checkups: routes.simple: everything is wrong" in result.output
+
+
+def test_checkups_skipped_when_the_handlers_dont_resolve(write_config, cache_with_account):
+    config = write_config(cache_with_account, base="good_unknown_handler.toml")
+    result = runner.invoke(app, ["doctor", "--config", str(config)], env=CLEAN_ENV)
+    assert result.exit_code == 1
+    assert "checkups not checked: the handlers didn't resolve" in result.output
+    assert "❌ checkups:" not in result.output
 
 
 # --- the token cache check ---
@@ -780,6 +926,7 @@ def test_json_report_on_a_green_run(
         "config",
         "routes",
         "handlers",
+        "checkups",
         "secrets",
         "token cache",
         "graph",

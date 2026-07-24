@@ -45,6 +45,46 @@ many transient failures it lands in the dead-letters folder. Raise
 the route's error folder. Anything else you raise is treated like a transient
 failure, so a handler that crashes on some message can't loop on it forever.
 
+### Checkups
+
+rah has no opinion about your config keys. It doesn't know what `model_file`
+means, or that `input_fields` has to line up with something, so it can't tell
+you when a route's config is broken -- it just hands the table over and lets
+your handler discover the problem, one message at a time, into an error folder.
+
+If you'd rather find out sooner, attach a `checkup` to your handler:
+
+```python
+def _checkup(context: Context) -> list[str]:
+    problems = []
+    model_file = context.config.get("model_file")
+    if not model_file:
+        problems.append("no model_file set")
+    elif not Path(model_file).exists():
+        problems.append(f"model_file {model_file} doesn't exist")
+    return problems
+
+handle.checkup = _checkup
+```
+
+`rah doctor` calls it with the same `Context` a message would arrive with, and
+`rah process` calls it at startup. Return one string per problem, worded for
+whoever has to fix the config; an empty list means the route looks healthy.
+Collecting problems beats raising on the first one, since the operator gets the
+whole list in one run -- rah catches a raise, but all it can report is that one
+exception.
+
+A checkup should be read-only and reasonably quick. It runs on demand, possibly
+on a box that isn't processing mail at all, and possibly several times in a row
+while someone edits a config and re-runs doctor.
+
+Problems fail `rah doctor` with a nonzero exit. They don't stop `rah process`:
+the route still gets its messages, and they fail loudly one at a time, which is
+easier to notice than a service that won't come up.
+
+Type checkers grumble about attributes on functions; ty wants a
+`# ty: ignore[unresolved-attribute]` comment on that last line.
+
 Two rules for handler authors:
 
 * Record a claim on `message.internet_message_id` in your own store (a sqlite

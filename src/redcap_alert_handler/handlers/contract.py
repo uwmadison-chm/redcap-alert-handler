@@ -69,6 +69,26 @@ Outcomes are exceptions, not return values -- raise `TransientError` or
 `PermanentError` to ask for a retry or send the message to the error folder,
 raise anything else and the engine treats it as transient, or return
 normally and the message is done. The return value itself is ignored.
+
+A handler may also carry a `checkup` attribute, which is how a route's config
+gets judged before any mail arrives. The engine doesn't understand a
+handler's config keys -- that's the whole point of `Context.config` being
+opaque -- so it asks instead:
+
+    def handle(message: Message, context: Context) -> None: ...
+
+    def _checkup(context: Context) -> list[str]:
+        return ["model_file points at nothing"]  # or [] when all is well
+
+    handle.checkup = _checkup
+
+`rah doctor` and `rah process` startup call it with the same Context a
+message would arrive with, and report one line per returned string. Raising
+works but reports less -- rah catches it and turns it into a single problem
+line -- so prefer collecting problems and returning them all at once. Keep it
+read-only: it runs on demand, possibly against a mailbox nobody is
+processing. Nothing requires a checkup; a handler without one just leaves rah
+with nothing to say about that route's config.
 """
 
 

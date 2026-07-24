@@ -10,6 +10,7 @@ from pathlib import Path
 import httpx
 from typer.testing import CliRunner
 
+import redcap_alert_handler.checks as checks_mod
 import redcap_alert_handler.cli.process as process_mod
 from redcap_alert_handler.cli.main import app
 
@@ -114,7 +115,8 @@ def test_one_shot_survives_a_failing_handler(
         raise RuntimeError("handler blew up")
 
     # The loader is tested elsewhere; here we only need a handler that fails.
-    monkeypatch.setattr(process_mod, "load_handlers", lambda cfg: {"simple": boom})
+    # Handlers come from the startup checks now, so that's where it goes.
+    monkeypatch.setattr(checks_mod, "load_handlers", lambda cfg: {"simple": boom})
 
     result = runner.invoke(
         app,
@@ -149,6 +151,10 @@ def test_graph_transport_failure_one_shot(
 ):
     fake = wired_auth_and_graph(install_fake_msal, fake_app, install_fake_graph)
     seed_folders(fake, fake.inbox_id)
+    # Two failures, because two things talk to Graph now: the startup graph
+    # check eats the first and reports it without stopping the run, and the
+    # pass itself hits the second.
+    fake.enqueue_exception(httpx.ConnectError("boom"))
     fake.enqueue_exception(httpx.ConnectError("boom"))
     config = write_process_config(tmp_path, cache_with_account)
 
@@ -158,6 +164,7 @@ def test_graph_transport_failure_one_shot(
         env=CLEAN_ENV,
     )
     assert result.exit_code == 1
+    assert "❌ graph:" in result.output  # reported at startup, not fatal there
     assert "💥" in result.output
 
 
@@ -193,13 +200,66 @@ def test_bad_config_reports_one_line_per_problem():
         env=CLEAN_ENV,
     )
     assert result.exit_code == 1
-    problem_lines = [line for line in result.output.splitlines() if "💥 config:" in line]
+    problem_lines = [line for line in result.output.splitlines() if "❌ config:" in line]
     assert len(problem_lines) >= 3
+    assert "💥 not starting: the config check failed" in result.output
 
 
 def test_missing_config_is_a_usage_error():
     result = runner.invoke(app, ["process"], env=CLEAN_ENV)
     assert result.exit_code == 2
+
+
+# -- startup checks ---------------------------------------------------------
+
+
+def test_startup_reports_the_whole_check_list(
+    tmp_path, cache_with_account, fake_app, install_fake_msal, install_fake_graph
+):
+    fake = wired_auth_and_graph(install_fake_msal, fake_app, install_fake_graph)
+    seed_folders(fake, fake.inbox_id)
+    config = write_process_config(tmp_path, cache_with_account)
+
+    result = runner.invoke(
+        app,
+        ["process", "--config", str(config), "--secrets", str(GOOD_SECRETS)],
+        env=CLEAN_ENV,
+    )
+    assert result.exit_code == 0, result.output
+    # The same lines doctor prints, at normal verbosity, before the first pass.
+    for check in ("config", "routes", "handlers", "checkups", "secrets", "graph"):
+        assert f"✅ {check} okay" in result.output
+
+
+def test_a_broken_checkup_shouts_but_still_starts(
+    tmp_path, cache_with_account, fake_app, install_fake_msal, install_fake_graph, monkeypatch
+):
+    # A route whose config its handler can't work with still processes mail:
+    # the messages fail loudly, one at a time, which is the whole point of
+    # letting the run start.
+    fake = wired_auth_and_graph(install_fake_msal, fake_app, install_fake_graph)
+    ids = seed_folders(fake, fake.inbox_id)
+    add_fresh_message(fake, fake.inbox_id)
+    config = write_process_config(tmp_path, cache_with_account)
+
+    from redcap_alert_handler.handlers.log_message import log_message
+
+    def unhappy(message, context):
+        return log_message(message, context)
+
+    unhappy.checkup = lambda context: [  # ty: ignore[unresolved-attribute]
+        "model_file points at nothing"
+    ]
+    monkeypatch.setattr(checks_mod, "load_handlers", lambda cfg: {"simple": unhappy})
+
+    result = runner.invoke(
+        app,
+        ["process", "--config", str(config), "--secrets", str(GOOD_SECRETS)],
+        env=CLEAN_ENV,
+    )
+    assert result.exit_code == 0, result.output
+    assert "❌ checkups: routes.simple: model_file points at nothing" in result.output
+    assert len(messages_in(fake, ids["simple/completed"])) == 1
 
 
 # -- poll interval ----------------------------------------------------------

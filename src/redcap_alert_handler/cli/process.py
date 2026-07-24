@@ -8,11 +8,17 @@ The thing you actually run. A bare `rah process` makes one pass over the base
 folder and exits, which is what makes it cron-able; `--watch` repeats the pass
 on a timer until a signal stops it. Either way the real work belongs to
 `processor.run_pass` (list, decide, dispatch, apply) and `dispatch` (the state
-machine); what lives here is the outer shell -- loading config and secrets,
+machine); what lives here is the outer shell -- running the startup checks,
 keeping a token warm, resolving the folder layout, sizing the worker pool, and
 turning trouble into the right exit code. Config or handler problems stop the
 command in both modes; Graph and auth trouble stop a single pass but only slow
 a watching one.
+
+Startup runs the whole `rah doctor` check list, so a mailbox that isn't
+provisioned or a route whose handler is unhappy with its config says so once,
+up front, instead of one message at a time. Only the checks in
+`checks.REQUIRED_TO_START` stop the command; the rest are reported and left to
+the pass loop, which already knows what to do about them.
 """
 
 from __future__ import annotations
@@ -29,6 +35,7 @@ import humanfriendly
 import typer
 
 from redcap_alert_handler.auth import AuthError, TokenProvider
+from redcap_alert_handler.checks import REQUIRED_TO_START, report, run_checks
 from redcap_alert_handler.cli.conventions import (
     ConfigOption,
     NoColorOption,
@@ -37,10 +44,9 @@ from redcap_alert_handler.cli.conventions import (
     VerboseOption,
     setup_logging,
 )
-from redcap_alert_handler.config import Config, ConfigError, Secrets, load_config, load_secrets
+from redcap_alert_handler.config import Config, Secrets
 from redcap_alert_handler.graph import GraphClient, GraphError
 from redcap_alert_handler.handlers.contract import Handler
-from redcap_alert_handler.handlers.loader import HandlerResolutionError, load_handlers
 from redcap_alert_handler.logs import get_logger
 from redcap_alert_handler.mailbox import resolve_base_folder, resolve_layout
 from redcap_alert_handler.pool import HandlerPool
@@ -80,12 +86,13 @@ def process(
 ) -> None:
     """Process the mailbox once, or keep polling it with --watch.
 
-    Loads the config, secrets, and handlers up front and stops if any of them
-    won't load. A single pass exits 0 once it finishes -- even if every
-    handler failed, since the mailbox records those outcomes -- and nonzero
-    only on infrastructure trouble (auth, Graph, an unprovisioned mailbox).
-    --watch runs the same pass on a timer and rides out that trouble instead,
-    exiting 0 when a signal asks it to stop.
+    Runs the `rah doctor` checks first and reports them, then stops if the
+    config, routes, handlers, or secrets are broken. A single pass exits 0
+    once it finishes -- even if every handler failed, since the mailbox
+    records those outcomes -- and nonzero only on infrastructure trouble
+    (auth, Graph, an unprovisioned mailbox). --watch runs the same pass on a
+    timer and rides out that trouble instead, exiting 0 when a signal asks it
+    to stop.
     """
     # The root callback already configured logging; only reconfigure when one
     # of process's own flags was set, so the flag closest to the command wins.
@@ -126,34 +133,38 @@ def _parse_poll_interval(value: str) -> float:
 
 def _load_startup(
     config_path: Path, secrets_path: Path
-) -> tuple[Config, Secrets, dict[str, Handler]]:
-    """Load config, secrets, and handlers, or report and exit.
+) -> tuple[Config, Secrets, Mapping[str, Handler]]:
+    """Run the doctor checks, report them, and hand back what a pass needs.
 
-    A config or handler that won't load is a human's job, not something to
-    retry, so both modes stop here. Each problem gets its own line.
+    Every check runs and every result is reported, so the operator sees the
+    whole picture before the first pass. Only `REQUIRED_TO_START` stops the
+    command: a config, route, handler, or secrets problem is a human's job,
+    not something to retry. A route whose checkup is unhappy still starts --
+    its messages will fail loudly, one line each, every pass -- and mailbox or
+    Graph trouble is left to the pass loop, which rides it out under --watch.
     """
-    try:
-        config = load_config(config_path)
-    except ConfigError as e:
-        for problem in e.problems:
-            logger.error("💥 config: %s", problem)
-        raise typer.Exit(1) from e
+    check_report = run_checks(config_path, secrets_path)
+    report(check_report.results)
 
-    try:
-        secrets = load_secrets(secrets_path)
-    except ConfigError as e:
-        for problem in e.problems:
-            logger.error("💥 secrets: %s", problem)
-        raise typer.Exit(1) from e
+    fatal = [name for name in check_report.failures() if name in REQUIRED_TO_START]
+    if fatal:
+        noun = "check" if len(fatal) == 1 else "checks"
+        logger.error("💥 not starting: the %s %s failed", _and_list(fatal), noun)
+        raise typer.Exit(1)
 
-    try:
-        handlers = load_handlers(config)
-    except HandlerResolutionError as e:
-        for problem in e.problems:
-            logger.error("💥 handler: %s", problem)
-        raise typer.Exit(1) from e
-
+    config, secrets, handlers = check_report.config, check_report.secrets, check_report.handlers
+    if config is None or secrets is None or handlers is None:
+        # Belt and suspenders: the checks above passed, so all three loaded.
+        logger.error("💥 not starting: the startup checks passed but didn't load a usable config")
+        raise typer.Exit(1)
     return config, secrets, handlers
+
+
+def _and_list(names: list[str]) -> str:
+    """Join check names for a log line: config, or config and secrets."""
+    if len(names) == 1:
+        return names[0]
+    return f"{', '.join(names[:-1])} and {names[-1]}"
 
 
 def _one_shot(
