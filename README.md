@@ -1,6 +1,177 @@
 # rah: the redcap alert handler
 A flexible monitor / dispatcher to let you use REDCap email sent to an o365 mailbox as a general message queue
 
+## What it's for
+
+Sometimes you want something to happen based on a trigger from REDCap, but REDCap can't do it itself. Maybe you want to assign them to a group using a model while they're still taking survey. Or, based on survey responses, decide which
+intervention message to text them. Or even send a push notification to someone's phone.
+
+REDCap doesn't give you a good way to do any of those things. Data Entry Triggers are the
+official answer, and they _suck_ -- one fires on every single data change, the
+message isn't configurable, and if your server is slow it slows down every data change in your entire project.
+
+Alerts and Automated Survey Invitations don't have those problems. You can target
+them with project logic, so they only fire when you actually care. You write
+their bodies, so they carry exactly the data you need. And they arrive as
+email. And... email is fast! Tested with our campus O365 mail, alerts showed up in the mailbox two to
+six seconds after the Alert was sent, which is fast enough for a lot of things
+that we'd call "realtime."
+
+So: rah treats an O365 mailbox as a work queue. An inbox is an... unusual... thing to use as a
+queue, and the design goes to some trouble on that account, but it means there's
+no public endpoint to host, no webhook to secure, and no extra infrastructure
+between REDCap and your code.
+
+## How it works
+
+`rah process` polls the mailbox through the Microsoft Graph API, every few
+seconds by default. For each message it finds, it takes the subject up to the
+first `|` and looks for a route with that exact slug. The route names a handler
+-- a plain Python function you wrote, installed from its own package -- and rah
+calls it with the message and the route's config.
+
+What happens next depends on what the handler does. Returns normally and the
+message moves to that route's `completed` folder. Raises a transient error and
+rah leaves it alone for `retry_backoff` and tries again on a later pass, until
+it either succeeds or burns through `max_retries` and dead-letters. Raises a permanent error and it goes to the
+route's `error` folder. A subject that matches no route dead-letters
+immediately, and so does anything that arrived longer ago than the route's
+`max_age`, so a weekend-long outage doesn't end with you acting on Friday's
+mail on Monday morning.
+
+Because every processed message moves out of the inbox, the inbox is the
+queue -- there's no cursor or delta token to keep, and a poll against a
+caught-up mailbox is one cheap request. The flip side is that exactly one rah
+may claim messages from a mailbox at a time. Run the watcher or run it from
+cron, not both.
+
+`rah process` runs in the foreground and logs to stdout, so systemd (or your
+terminal, while you're working) does the process management. Handlers run in
+threads inside that one process, which is worth knowing when you write one:
+they need to be idempotent, since a crash at the wrong moment means a message
+comes back around.
+
+## Setting up a deployment
+
+rah by itself doesn't do anything interesting -- the handlers do the actual
+work, and they live in their own packages. So a deployment is a small uv
+project with no code in it at all. Its job is to pin a version of rah together
+with the handler packages this box should run, and to hold the config that says
+which alerts go to which handler.
+
+Name it whatever makes sense; ours is `our-rah`. Say you want to run
+[rah-random-forest](https://github.com/uwmadison-chm/rah-random-forest), which
+scores an alert through a scikit-learn model and writes the predictions back to
+REDCap:
+
+```
+uv init --bare our-rah
+cd our-rah
+uv add "redcap-alert-handler @ git+https://github.com/uwmadison-chm/redcap-alert-handler@v0.1.0"
+uv add "rah-random-forest @ git+ssh://git@github.com/uwmadison-chm/rah-random-forest@v0.1.0"
+```
+
+You end up with a `pyproject.toml` that's almost entirely dependencies:
+
+```toml
+[project]
+name = "our-rah"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = [
+    "redcap-alert-handler",
+    "rah-random-forest",
+]
+
+[tool.uv.sources]
+redcap-alert-handler = { git = "https://github.com/uwmadison-chm/redcap-alert-handler", tag = "v0.1.0" }
+rah-random-forest = { git = "ssh://git@github.com/uwmadison-chm/rah-random-forest", tag = "v0.1.0" }
+```
+
+rah's repo is public, so it clones over HTTPS with no credentials. Handler
+packages are often private, and an `ssh://` pin means uv authenticates with the
+box's deploy key or your ssh agent -- no package index to run, no tokens to
+rotate. Pin tags rather than branches, and commit `uv.lock`: that lockfile is
+the deploy manifest, and reverting it plus `uv sync` and a restart is the whole
+rollback story.
+
+### Wiring a route
+
+Installing the package makes its handlers available; the config decides whether
+any of them run. A handler package's README states its distribution name and
+the handler names it registers -- rah-random-forest registers `predict` -- and
+`package:name` is the string you copy into a route:
+
+```toml
+[global]
+mailbox = "svc-rah@example.edu"
+base_folder = "inbox"
+token_cache_path = "/var/lib/rah/token-cache.json"
+state_base_dir = "/var/lib/rah/state"
+max_retries = 5
+retry_backoff = "5m"
+max_age = "1d"
+
+[routes.rf_predict]
+handler = "rah-random-forest:predict"
+
+# Everything below here belongs to the handler, not to rah.
+redcap_info_file = "/var/lib/rah/secrets/redcap.toml"
+redcap_id_field = "record_id"
+model_file = "/var/lib/rah/models/panas_rf.joblib"
+
+[routes.rf_predict.input_fields]
+panas20_q01 = "q1"
+panas20_q02 = "q2"
+
+[routes.rf_predict.target_fields]
+pa = "pa_zscore"
+na = "na_zscore"
+```
+
+The slug (`rf_predict`) is the route's name everywhere. REDCap alert subjects
+look like `slug|whatever else you want`, and the part before the first `|` is
+matched against your slugs exactly; the same slug names the mailbox folder the
+route's messages land in and the directory under `state_base_dir` the handler
+gets to write in. Only `handler` means anything to
+rah. The rest of the table is passed through to whatever the handler asks for,
+so what goes there comes from the handler package's docs, not from these.
+
+### First run
+
+Credentials -- tenant id, client id, client secret -- go in a separate TOML file
+you don't commit, and get passed with `--secrets`. Then, on a fresh mailbox:
+
+```
+uv run rah auth --config rah.toml --secrets secrets.toml
+uv run rah init --config rah.toml --secrets secrets.toml
+uv run rah doctor --config rah.toml --secrets secrets.toml
+uv run rah process --config rah.toml --secrets secrets.toml --watch
+```
+
+`auth` signs in as the service account and caches the token; `init` creates the
+mailbox folders and categories rah needs; `doctor` reports on all of it plus
+your routes, including whether each handler resolves and what its checkup says
+about the config. Run `doctor` again after any config change -- catching a typo
+in `model_file` there beats catching it one message at a time in the error
+folder.
+
+Adding a second handler package is one `uv add` and one `[routes.*]` table.
+Dropping one is a deleted dependency and a deleted table. Neither touches rah or
+any of the other handler repos.
+
+### Working on a handler
+
+Entry points are read once at startup, so handlers aren't hot-reloadable and
+edits need a restart. While you're actively developing one, swap the git pin for
+a path install so you don't have to reinstall on every change:
+
+```
+uv add --editable ../rah-random-forest
+```
+
+Put the git pin back before you deploy.
+
 ## Handler API
 
 Handlers are plain functions, shipped in ordinary Python packages and found
