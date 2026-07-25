@@ -8,7 +8,7 @@ intervention message to text them. Or even send a push notification to someone's
 
 REDCap doesn't give you a good way to do any of those things. Data Entry Trigger webhooks are the
 official answer, and they _suck_ -- one fires on every single data change, the
-message isn't configurable, and if your server is slow it slows down every data change in your entire project.
+message payload isn't configurable, and if your server is slow it blocks _every data change in your entire project._
 
 Alerts and Automated Survey Invitations don't have those problems. You can target
 them with project logic, so they only fire when you actually care. You write
