@@ -3,7 +3,7 @@ A flexible monitor / dispatcher to let you use REDCap email sent to an o365 mail
 
 ## What it's for
 
-Sometimes you want something to happen based on a trigger from REDCap, but REDCap doesn't have the ability. Maybe you want to assign them to a group using a model while they're still taking survey. Or, based on survey responses, decide which
+Sometimes you want something to happen based on a trigger from REDCap, but REDCap doesn't have the ability. Maybe you want to assign a participant to a group using a model while they're still taking survey. Or, based on survey responses, decide which
 intervention message to text them. Or even send a push notification to someone's phone.
 
 REDCap doesn't give you a good way to do any of those things. Data Entry Triggers are the
